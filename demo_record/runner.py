@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from browser_use.browser.events import BrowserStoppedEvent
 from browser_use.browser.profile import ViewportSize
 from browser_use.browser.session import BrowserSession
 from browser_use.browser.video_recorder import VideoRecorderService
@@ -33,6 +36,7 @@ class RunResult:
     video_path: Path
     error: str | None = None
     last_screenshot: Path | None = None
+    stop_reason: str | None = None
 
 
 class _ScreencastRecorder:
@@ -143,12 +147,45 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
     recorder: _ScreencastRecorder | None = None
     actions = ActionRunner(browser)
 
+    # Stop machinery: Ctrl+C / SIGTERM, or the browser dying (user closed the
+    # window), set a flag checked between steps. The video is finalized either
+    # way. A second Ctrl+C hard-exits immediately.
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+    stop_reason: str | None = None
+
+    def _request_stop(reason: str) -> None:
+        nonlocal stop_reason
+        if stop_reason is None:
+            stop_reason = reason
+        stop_event.set()
+
+    def _on_browser_stopped(event: Any) -> None:
+        reason = getattr(event, "reason", None) or "disconnected"
+        _request_stop(f"browser was closed ({reason})")
+
+    browser.event_bus.on(BrowserStoppedEvent, _on_browser_stopped)
+
+    def _on_signal() -> None:
+        if stop_reason is not None:
+            os._exit(130)  # second Ctrl+C: force exit without cleanup
+        _request_stop("interrupted (Ctrl+C)")
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _on_signal)
+        except NotImplementedError:  # pragma: no cover - non-unix
+            pass
+
     try:
         await browser.start()
         recorder = _ScreencastRecorder(browser, video_path, size, framerate=30)
         await recorder.start()
 
         for index, step in enumerate(spec.steps, start=1):
+            if stop_event.is_set():
+                logger.info("stopped before step %d", index)
+                break
             try:
                 await actions.run(step)
             except DoneSignal:
@@ -170,15 +207,33 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                     error=f"step {index} {step.action}: {type(exc).__name__}: {exc}",
                     last_screenshot=shot,
                 )
-            # Per-step screenshot for review.
+            # Skip the pause and the review screenshot between adjacent title
+            # and description steps: they form one visual change, and pausing
+            # between them would show a mismatched pair (new title, old
+            # description) on the recording.
+            next_step = spec.steps[index] if index < len(spec.steps) else None
+            if next_step is not None and {step.action, next_step.action} == {"title", "description"}:
+                continue
+            if stop_event.is_set():
+                break
+            if spec.delay_ms > 0:
+                await asyncio.sleep(spec.delay_ms / 1000.0)
+            # Per-step screenshot for review, taken once the page has settled
+            # (after the delay) so overlay fade-ins don't appear half-finished.
             try:
                 shot_bytes: bytes = await browser.take_screenshot()
                 (steps_dir / f"step_{index:02d}.png").write_bytes(shot_bytes)
             except Exception:  # noqa: BLE001 - screenshots are best-effort
                 logger.warning("step %d: screenshot failed", index, exc_info=True)
 
-            if spec.delay_ms > 0:
-                await asyncio.sleep(spec.delay_ms / 1000.0)
+        if stop_reason is not None:
+            shot = await _save_error_screenshot(browser, output_dir / "error.png")
+            return RunResult(
+                ok=False,
+                video_path=video_path,
+                stop_reason=stop_reason,
+                last_screenshot=shot,
+            )
 
         return RunResult(ok=True, video_path=video_path)
     finally:

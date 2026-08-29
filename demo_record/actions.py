@@ -84,11 +84,12 @@ class ActionRunner:
     # -- overlay ----------------------------------------------------------------
 
     async def _render_overlay(self) -> None:
-        """Rebuild the overlay bars from state. Idempotent; safe after navigation.
+        """Install/refresh the overlay in the page from the runner's state.
 
-        Title and description that share the same position render as one merged
-        bar (title line stacked over description line), aligned by the title's
-        align. Long text wraps instead of being cut off.
+        The renderer is installed once into the page and driven by state, with
+        a MutationObserver re-applying it when the app replaces its DOM (loading
+        screens, soft navigation) outside a navigate step. Bars render in the
+        top layer (Popover API) so page CSS can't re-anchor or clip them.
         """
         if not self._overlay:
             return
@@ -98,53 +99,69 @@ class ActionRunner:
         }
         expr = f"""
 (() => {{
-  const state = {json.dumps(state)};
-  const title = state.title && state.title.text ? state.title : null;
-  const desc = state.description && state.description.text ? state.description : null;
-  if (!title && !desc) return {{ ok: true, empty: true }};
-  let root = document.getElementById('demo-record-overlay');
-  if (!root) {{
-    root = document.createElement('div');
-    root.id = 'demo-record-overlay';
-    root.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;'
-      + 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;';
-    (document.body || document.documentElement).appendChild(root);
+  window.__demoRecordOverlayState = {json.dumps(state)};
+  if (!window.__demoRecordRenderOverlay) {{
+    const justify = a => a === 'left' ? 'flex-start' : a === 'right' ? 'flex-end' : 'center';
+    const BAR_CSS = {json.dumps(_OVERLAY_BAR_CSS)};
+    const TITLE_CSS = {json.dumps(_TITLE_LINE_CSS)};
+    const DESC_CSS = {json.dumps(_DESCRIPTION_LINE_CSS)};
+    window.__demoRecordRenderOverlay = (state) => {{
+      const title = state.title && state.title.text ? state.title : null;
+      const desc = state.description && state.description.text ? state.description : null;
+      let root = document.getElementById('demo-record-overlay');
+      if (!root) {{
+        root = document.createElement('div');
+        root.id = 'demo-record-overlay';
+        root.style.cssText = 'position:fixed;inset:0;pointer-events:none;'
+          + 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;';
+        (document.body || document.documentElement).appendChild(root);
+      }}
+      const rendered = [];
+      for (const position of ['top', 'bottom']) {{
+        const slotTitle = title && title.position === position ? title : null;
+        const slotDesc = desc && desc.position === position ? desc : null;
+        if (!slotTitle && !slotDesc) continue;
+        const bar = document.createElement('div');
+        bar.style.cssText = BAR_CSS;
+        const addLine = (text, kind) => {{
+          const line = document.createElement('div');
+          line.style.cssText = kind === 'title' ? TITLE_CSS : DESC_CSS;
+          line.textContent = text;
+          bar.appendChild(line);
+        }};
+        if (slotTitle) addLine(slotTitle.text, 'title');
+        if (slotDesc) addLine(slotDesc.text, 'description');
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'position:fixed;left:0;right:0;display:flex;padding:20px 28px;box-sizing:border-box;'
+          + 'pointer-events:none;'
+          + (position === 'top' ? 'top:0;' : 'bottom:0;')
+          + 'justify-content:' + justify((slotTitle || slotDesc).align) + ';';
+        wrap.appendChild(bar);
+        rendered.push({{ position, wrap }});
+      }}
+      root.replaceChildren(...rendered.map(r => r.wrap));
+      // Top layer (Popover API): page styles like transforms on body would
+      // otherwise re-anchor position:fixed and clip the bars.
+      for (const r of rendered) {{
+        try {{
+          r.wrap.popover = 'manual';
+          r.wrap.showPopover();
+        }} catch (e) {{ /* older Chromium: fall back to normal fixed positioning */ }}
+      }}
+    }};
   }}
-  const justify = a => a === 'left' ? 'flex-start' : a === 'right' ? 'flex-end' : 'center';
-  const makeBar = () => {{
-    const bar = document.createElement('div');
-    bar.style.cssText = {json.dumps(_OVERLAY_BAR_CSS)};
-    return bar;
-  }};
-  const addLine = (bar, text, kind) => {{
-    const line = document.createElement('div');
-    line.style.cssText = kind === 'title' ? {json.dumps(_TITLE_LINE_CSS)} : {json.dumps(_DESCRIPTION_LINE_CSS)};
-    line.textContent = text;
-    bar.appendChild(line);
-  }};
-  const rendered = [];
-  for (const position of ['top', 'bottom']) {{
-    const slotTitle = title && title.position === position ? title : null;
-    const slotDesc = desc && desc.position === position ? desc : null;
-    if (!slotTitle && !slotDesc) continue;
-    const bar = makeBar();
-    if (slotTitle) addLine(bar, slotTitle.text, 'title');
-    if (slotDesc) addLine(bar, slotDesc.text, 'description');
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'position:absolute;left:0;right:0;display:flex;padding:20px 28px;box-sizing:border-box;'
-      + (position === 'top' ? 'top:0;' : 'bottom:0;')
-      + 'justify-content:' + justify((slotTitle || slotDesc).align) + ';';
-    wrap.appendChild(bar);
-    rendered.push({{ position, wrap }});
+  if (!window.__demoRecordOverlayObserver) {{
+    window.__demoRecordOverlayObserver = new MutationObserver(() => {{
+      const st = window.__demoRecordOverlayState;
+      const hasContent = st && ((st.title && st.title.text) || (st.description && st.description.text));
+      const root = document.getElementById('demo-record-overlay');
+      if (hasContent && (!root || !root.childElementCount)) {{
+        requestAnimationFrame(() => window.__demoRecordRenderOverlay(window.__demoRecordOverlayState));
+      }}
+    }});
+    window.__demoRecordOverlayObserver.observe(document.documentElement, {{ childList: true, subtree: true }});
   }}
-  root.replaceChildren(...rendered.map(r => r.wrap));
-  for (const r of rendered) {{
-    r.wrap.firstChild.animate(
-      [{{ opacity: 0, transform: 'translateY(' + (r.position === 'top' ? '-8px' : '8px') + ')' }},
-       {{ opacity: 1, transform: 'none' }}],
-      {{ duration: 320, easing: 'ease-out' }}
-    );
-  }}
+  window.__demoRecordRenderOverlay(window.__demoRecordOverlayState);
   return {{ ok: true }};
 }})()
 """

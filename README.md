@@ -74,12 +74,20 @@ Notes:
 - **`title` / `description`** render narration text on the video, live: fixed,
   pointer-transparent pills injected into the app page. The description uses a
   smaller font and can carry more text; long text wraps instead of being cut
-  off. Placement is up to the model via `position` (`top`/`bottom`) and `align`
-  (`left`/`center`/`right`). If both share the same position they merge into a
-  single box — title on the first line, description under it (the box follows
-  the title's align). They survive navigation: set them once and they re-appear
-  on every page; change them mid-pipeline to narrate each section. An empty
-  `text` hides that slot.
+  off. Placement is up to the model via `position` (`top`/`bottom`, defaults
+  title→top, description→bottom) and `align` (`left`/`center`/`right`, default
+  `center`). If both share the same position they merge into a single box —
+  title on the first line, description under it (the box follows the title's
+  align). An empty `text` hides that slot.
+  - **Paired steps are atomic**: when a `title` step is immediately followed by
+    a `description` step (nothing between them), the inter-step pause is
+    skipped, so the viewer never sees a mismatched pair (new title + old
+    description). Emit them as a pair at every chapter change.
+  - **Narration survives navigation**: set it once and it re-appears on every
+    page — including before the first `navigate` — and it re-applies itself if
+    the app replaces its DOM mid-run (loading screens, soft navigation).
+  - The bars render in Chrome's top layer, so app CSS (transforms, overflow)
+    cannot hide or clip them.
 
 ## Tips
 
@@ -116,6 +124,8 @@ Rules:
 - Do NOT invent element indices. Always use selectors.
 - Set `headless` to whatever the user asked for (default false).
 - Use top-level `delay_ms` (default 500) for pacing; add `wait` steps for longer transitions.
+- Narrate chapters with a `title` step immediately followed by a `description`
+  step (adjacent, nothing between) — the tool then applies them as one change.
 - If you target a dev server, give the first `navigate` a high `wait_seconds` (~8s) — routes compile on first request.
 - ALWAYS run `demo-record --validate demo.json` and fix any errors until it
   prints OK before telling the user it's ready.
@@ -129,4 +139,5 @@ page says) and `LAST_SCREENSHOT <path>` — report that back.
 
 - No LLM / exploration / self-healing. The pipeline is fixed.
 - No element re-matching or recording of an exploratory session.
-- No post-production polish (zoom, captions). Raw MP4 is enough for review.
+- No zoom/pan/caption post-production. Narration text is burned in live and the
+  MP4 is the final product.

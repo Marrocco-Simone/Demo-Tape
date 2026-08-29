@@ -85,6 +85,12 @@ def main(argv: list[str] | None = None) -> int:
     spec = _load_and_validate(args.pipeline)
     result = run(spec)
 
+    if result.stop_reason is not None:
+        print(f"STOPPED {result.stop_reason}")
+        if result.last_screenshot is not None:
+            print(f"LAST_SCREENSHOT {result.last_screenshot}")
+        print(f"VIDEO_PARTIAL {result.video_path}")
+        return 130 if result.stop_reason.startswith("interrupted") else 1
     if result.ok:
         print(f"VIDEO_OK {result.video_path}")
         return 0
