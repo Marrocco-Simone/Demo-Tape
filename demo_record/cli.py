@@ -25,6 +25,8 @@ EXAMPLE = {
     "delay_ms": 500,
     "steps": [
         {"action": "navigate", "url": "http://localhost:3000"},
+        {"action": "title", "text": "Sign up", "align": "left"},
+        {"action": "description", "text": "Create your account in seconds"},
         {"action": "click", "selector": "#get-started"},
         {"action": "wait", "seconds": 1.0},
         {
@@ -34,6 +36,7 @@ EXAMPLE = {
             "type_delay_ms": 70,
         },
         {"action": "select", "selector": "select#plan", "option": "pro"},
+        {"action": "description", "text": "Choosing the Pro plan"},
         {"action": "click", "selector": "#continue"},
         {"action": "assert_text", "text": "Welcome"},
         {"action": "done"},

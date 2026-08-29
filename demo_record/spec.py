@@ -74,6 +74,24 @@ class ScrollStep(BaseModel):
     selector: str = Field(description="CSS selector of the element to bring to the center of the viewport.")
 
 
+class TitleStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["title"]
+    text: str = Field(description="Overlay title text. Empty string hides the title.")
+    position: Literal["top", "bottom"] = Field(default="top", description="Vertical placement of the title bar.")
+    align: Literal["left", "center", "right"] = Field(default="center", description="Horizontal alignment of the title bar.")
+
+
+class DescriptionStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["description"]
+    text: str = Field(description="Overlay description text. Empty string hides the description.")
+    position: Literal["top", "bottom"] = Field(default="bottom", description="Vertical placement of the description bar.")
+    align: Literal["left", "center", "right"] = Field(default="center", description="Horizontal alignment of the description bar.")
+
+
 class AssertTextStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -95,6 +113,8 @@ Step = Annotated[
         TypeStep,
         SelectStep,
         ScrollStep,
+        TitleStep,
+        DescriptionStep,
         AssertTextStep,
         DoneStep,
     ],

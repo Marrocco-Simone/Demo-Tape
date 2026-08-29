@@ -49,6 +49,8 @@ Each step is a flat object with an `action` plus its params:
 { "action": "type", "selector": "input[name=email]", "text": "demo@acme.com", "type_delay_ms": 70, "clear": true }
 { "action": "select", "selector": "select#plan", "option": "pro" }
 { "action": "scroll", "selector": "#pricing" }
+{ "action": "title", "text": "Sign up", "position": "top", "align": "left" }
+{ "action": "description", "text": "Choose a plan to unlock athletes", "position": "bottom", "align": "center" }
 { "action": "assert_text", "text": "Welcome" }
 { "action": "done" }
 ```
@@ -69,6 +71,15 @@ Notes:
   error includes the **current URL** and a slice of what the page actually says —
   this is usually enough to spot a redirect (e.g. a locale middleware sending you
   to `/en`) immediately.
+- **`title` / `description`** render narration text on the video, live: fixed,
+  pointer-transparent pills injected into the app page. The description uses a
+  smaller font and can carry more text; long text wraps instead of being cut
+  off. Placement is up to the model via `position` (`top`/`bottom`) and `align`
+  (`left`/`center`/`right`). If both share the same position they merge into a
+  single box — title on the first line, description under it (the box follows
+  the title's align). They survive navigation: set them once and they re-appear
+  on every page; change them mid-pipeline to narrate each section. An empty
+  `text` hides that slot.
 
 ## Tips
 

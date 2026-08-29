@@ -6,6 +6,10 @@ video), then interacts. Element interaction runs through a small JS snippet via
 CDP `Runtime.evaluate` for reliability; typing additionally uses per-keystroke
 CDP `Input.dispatchKeyEvent` so text appears letter-by-letter on the recording.
 
+Title/description overlays are injected straight into the app page as fixed,
+pointer-transparent bars, and re-injected after every navigate (navigation
+wipes the DOM). The current overlay state lives on the runner.
+
 Each handler raises ActionError with a human-readable message naming the
 selector on failure, which the runner turns into the ERROR contract line.
 """
@@ -20,9 +24,19 @@ from browser_use.browser.session import BrowserSession, CDPSession
 
 from demo_record.spec import Step
 
-# Milliseconds to wait after scrolling an element into view, so the smooth
+# Seconds to wait after scrolling an element into view, so the smooth
 # scroll motion is captured on video before the interaction happens.
 SETTLE_AFTER_SCROLL_S = 0.4
+
+_OVERLAY_BAR_CSS = (
+    "display:flex;flex-direction:column;gap:6px;"
+    "background:rgba(15,23,42,0.78);padding:14px 24px;border-radius:16px;"
+    "backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);"
+    "border:1px solid rgba(148,163,184,0.25);box-shadow:0 12px 40px rgba(0,0,0,0.4);"
+    "max-width:min(680px, 82%);box-sizing:border-box;"
+)
+_TITLE_LINE_CSS = "font-size:26px;font-weight:700;line-height:1.25;color:#f8fafc;"
+_DESCRIPTION_LINE_CSS = "font-size:17px;font-weight:400;line-height:1.45;color:#cbd5e1;white-space:pre-wrap;"
 
 
 class ActionError(Exception):
@@ -37,10 +51,13 @@ class DoneSignal(Exception):
 # synthesized keydown/keyup pair. This keeps input events natural for the page.
 _TYPEABLE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 `~!@#$%^&*()_+-=[]{}\\|;:'\",<.>/?")
 
+_ALIGN_TO_JUSTIFY = {"left": "flex-start", "center": "center", "right": "flex-end"}
+
 
 class ActionRunner:
     def __init__(self, browser: BrowserSession) -> None:
         self._browser = browser
+        self._overlay: dict[str, dict[str, str]] = {}
 
     async def _cdp(self) -> tuple[Any, str]:
         cdp_session: CDPSession = await self._browser.get_or_create_cdp_session()
@@ -60,7 +77,90 @@ class ActionRunner:
             description = exc.get("description") if isinstance(exc, dict) else None
             raise ActionError(f"page script error: {description or text}")
         inner = result.get("result", {})
+        if inner.get("subtype") == "error":
+            raise ActionError(f"page script error: {inner.get('description', 'evaluation failed')}")
         return inner.get("value")
+
+    # -- overlay ----------------------------------------------------------------
+
+    async def _render_overlay(self) -> None:
+        """Rebuild the overlay bars from state. Idempotent; safe after navigation.
+
+        Title and description that share the same position render as one merged
+        bar (title line stacked over description line), aligned by the title's
+        align. Long text wraps instead of being cut off.
+        """
+        if not self._overlay:
+            return
+        state = {
+            "title": self._overlay.get("title"),
+            "description": self._overlay.get("description"),
+        }
+        expr = f"""
+(() => {{
+  const state = {json.dumps(state)};
+  const title = state.title && state.title.text ? state.title : null;
+  const desc = state.description && state.description.text ? state.description : null;
+  if (!title && !desc) return {{ ok: true, empty: true }};
+  let root = document.getElementById('demo-record-overlay');
+  if (!root) {{
+    root = document.createElement('div');
+    root.id = 'demo-record-overlay';
+    root.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;'
+      + 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;';
+    (document.body || document.documentElement).appendChild(root);
+  }}
+  const justify = a => a === 'left' ? 'flex-start' : a === 'right' ? 'flex-end' : 'center';
+  const makeBar = () => {{
+    const bar = document.createElement('div');
+    bar.style.cssText = {json.dumps(_OVERLAY_BAR_CSS)};
+    return bar;
+  }};
+  const addLine = (bar, text, kind) => {{
+    const line = document.createElement('div');
+    line.style.cssText = kind === 'title' ? {json.dumps(_TITLE_LINE_CSS)} : {json.dumps(_DESCRIPTION_LINE_CSS)};
+    line.textContent = text;
+    bar.appendChild(line);
+  }};
+  const rendered = [];
+  for (const position of ['top', 'bottom']) {{
+    const slotTitle = title && title.position === position ? title : null;
+    const slotDesc = desc && desc.position === position ? desc : null;
+    if (!slotTitle && !slotDesc) continue;
+    const bar = makeBar();
+    if (slotTitle) addLine(bar, slotTitle.text, 'title');
+    if (slotDesc) addLine(bar, slotDesc.text, 'description');
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:absolute;left:0;right:0;display:flex;padding:20px 28px;box-sizing:border-box;'
+      + (position === 'top' ? 'top:0;' : 'bottom:0;')
+      + 'justify-content:' + justify((slotTitle || slotDesc).align) + ';';
+    wrap.appendChild(bar);
+    rendered.push({{ position, wrap }});
+  }}
+  root.replaceChildren(...rendered.map(r => r.wrap));
+  for (const r of rendered) {{
+    r.wrap.firstChild.animate(
+      [{{ opacity: 0, transform: 'translateY(' + (r.position === 'top' ? '-8px' : '8px') + ')' }},
+       {{ opacity: 1, transform: 'none' }}],
+      {{ duration: 320, easing: 'ease-out' }}
+    );
+  }}
+  return {{ ok: true }};
+}})()
+"""
+        value = await self._eval(expr)
+        if not value or not value.get("ok"):
+            raise ActionError("could not inject overlay into the page")
+
+    async def title(self, text: str, position: str, align: str) -> None:
+        self._overlay["title"] = {"text": text, "position": position, "align": align}
+        await self._render_overlay()
+
+    async def description(self, text: str, position: str, align: str) -> None:
+        self._overlay["description"] = {"text": text, "position": position, "align": align}
+        await self._render_overlay()
+
+    # -- shared helpers --------------------------------------------------------
 
     async def _scroll_into_center(self, selector: str) -> None:
         """Bring `selector` to the center of the viewport, raising if missing."""
@@ -94,6 +194,9 @@ class ActionRunner:
         client, session_id = await self._cdp()
         await client.send.Page.navigate(params={"url": url}, session_id=session_id)
         await self._wait_for_load()
+        if self._overlay:
+            # Navigation wiped the DOM; restore the current overlay state.
+            await self._render_overlay()
         if wait_seconds > 0:
             await asyncio.sleep(wait_seconds)
 
@@ -222,6 +325,10 @@ class ActionRunner:
             await self.select(step.selector, step.option)
         elif action == "scroll":
             await self.scroll(step.selector)
+        elif action == "title":
+            await self.title(step.text, step.position, step.align)
+        elif action == "description":
+            await self.description(step.text, step.position, step.align)
         elif action == "assert_text":
             await self.assert_text(step.text)
         elif action == "done":

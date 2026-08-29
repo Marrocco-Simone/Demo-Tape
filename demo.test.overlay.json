@@ -1,0 +1,29 @@
+{
+  "viewport": { "width": 1280, "height": 800 },
+  "headless": false,
+  "output_dir": "./demo_out_overlay",
+  "delay_ms": 1000,
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:8931/index.html" },
+    { "action": "title", "text": "Sign up flow", "position": "top", "align": "left" },
+    {
+      "action": "description",
+      "text": "Create your account in seconds — pick a plan, invite your athletes, and you are ready for the first tournament of the season.",
+      "position": "top",
+      "align": "left"
+    },
+    { "action": "click", "selector": "#get-started" },
+    { "action": "wait", "seconds": 1.0 },
+    {
+      "action": "type",
+      "selector": "input[name=email]",
+      "text": "demo@acme.com",
+      "type_delay_ms": 40
+    },
+    { "action": "select", "selector": "select#plan", "option": "pro" },
+    { "action": "description", "text": "Choosing Pro and continuing", "position": "bottom", "align": "right" },
+    { "action": "click", "selector": "#continue" },
+    { "action": "assert_text", "text": "Welcome" },
+    { "action": "done" }
+  ]
+}
