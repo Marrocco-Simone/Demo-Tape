@@ -22,7 +22,7 @@ EXAMPLE = {
     "viewport": {"width": 1280, "height": 800},
     "headless": False,
     "output_dir": "./demo_out",
-    "delay_ms": 250,
+    "delay_ms": 500,
     "steps": [
         {"action": "navigate", "url": "http://localhost:3000"},
         {"action": "click", "selector": "#get-started"},

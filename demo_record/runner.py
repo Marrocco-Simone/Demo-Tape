@@ -126,6 +126,9 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
         headless=spec.headless,
         viewport={"width": spec.viewport.width, "height": spec.viewport.height},
         window_size={"width": spec.viewport.width, "height": spec.viewport.height},
+        # Browser-use downloads its ad-block/cookie extensions at startup, which
+        # noisily fails (and is useless for demos). Turn them off.
+        enable_default_extensions=False,
         # We manage recording ourselves; disable browser-use's auto-recorder.
         record_video_dir=None,
     )

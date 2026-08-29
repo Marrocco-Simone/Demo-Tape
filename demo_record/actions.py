@@ -181,10 +181,27 @@ class ActionRunner:
         await self._scroll_into_center(selector)
 
     async def assert_text(self, text: str) -> None:
-        expr = f"document.body ? document.body.innerText.includes({json.dumps(text)}) : false"
+        expr = """
+(() => {
+  const want = %s;
+  const url = location.href;
+  const body = document.body ? document.body.innerText : '';
+  const re = /\\s+/g;
+  const norm = s => s.replace(re, ' ');
+  // Plain substring first (exact presence).
+  if (body.includes(want)) return { found: true, url, snippet: '' };
+  // Whitespace-tolerant check (survives newlines/extra spaces in the page).
+  if (norm(body).includes(norm(want))) return { found: true, url, snippet: '' };
+  return { found: false, url, snippet: norm(body).slice(0, 200) };
+})()
+""" % json.dumps(text)
         value = await self._eval(expr)
-        if not value:
-            raise ActionError(f'assert_text failed: "{text}" not present in page body')
+        if not value or not value.get("found"):
+            url = (value or {}).get("url", "unknown url")
+            snippet = (value or {}).get("snippet", "")
+            raise ActionError(
+                f'assert_text failed: "{text}" not found at {url}. page says: "{snippet}..."'
+            )
 
     async def done(self) -> None:
         raise DoneSignal()

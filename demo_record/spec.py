@@ -113,7 +113,7 @@ class DemoSpec(BaseModel):
         default="./demo_out", description="Directory for video.mp4, steps/ and error.png."
     )
     delay_ms: int = Field(
-        default=250,
+        default=500,
         ge=0,
         description="Pause applied after EVERY step, in ms. Use explicit wait steps for longer pauses.",
     )

@@ -37,7 +37,7 @@ A pipeline is a JSON object:
 | `viewport`   | object  | `{1280, 800}` | Browser viewport size. |
 | `headless`   | bool    | `false`       | Run without a visible window (video still records). |
 | `output_dir` | string  | `./demo_out`  | Where `video.mp4`, `steps/`, `error.png` go. |
-| `delay_ms`   | int     | `250`         | Pause after **every** step. Use `wait` steps for longer pauses. |
+| `delay_ms`   | int     | `500`         | Pause after **every** step. Use `wait` steps for longer pauses. |
 | `steps`      | array   | —             | Ordered list of steps (below). |
 
 Each step is a flat object with an `action` plus its params:
@@ -65,6 +65,18 @@ Notes:
 - **`select`** scrolls to a native `<select>`, picks the option (by value or
   visible label), and fires `input`/`change` events.
 - **`assert_text`** stops the pipeline (error) if the text is not in the page body.
+  The check is whitespace-tolerant (extra newlines/spaces are fine). On failure the
+  error includes the **current URL** and a slice of what the page actually says —
+  this is usually enough to spot a redirect (e.g. a locale middleware sending you
+  to `/en`) immediately.
+
+## Tips
+
+- **Dev servers**: a first `navigate` against a dev server (Next.js, etc.) compiles
+  the route on first request, so give it room: `{ "action": "navigate", "url": "...",
+  "wait_seconds": 8 }`. Tune down once the route is warm.
+- **Pacing**: `delay_ms` (default `500`) is the rhythm between steps. Lower it for a
+  snappier video; add explicit `wait` steps where the app needs a real pause.
 
 ## Output contract
 
@@ -92,12 +104,14 @@ Rules:
 - Target elements by the CSS selectors / ids present in the code you wrote.
 - Do NOT invent element indices. Always use selectors.
 - Set `headless` to whatever the user asked for (default false).
-- Use top-level `delay_ms` for pacing; add `wait` steps for longer transitions.
+- Use top-level `delay_ms` (default 500) for pacing; add `wait` steps for longer transitions.
+- If you target a dev server, give the first `navigate` a high `wait_seconds` (~8s) — routes compile on first request.
 - ALWAYS run `demo-record --validate demo.json` and fix any errors until it
   prints OK before telling the user it's ready.
 
 The user runs `demo-record demo.json` to produce the video. On failure the tool
-prints `ERROR step N ...` and `LAST_SCREENSHOT <path>` — report that back.
+prints `ERROR step N ...` (for assert_text it also prints the final URL + what the
+page says) and `LAST_SCREENSHOT <path>` — report that back.
 ```
 
 ## What it does NOT do (by design)
