@@ -127,11 +127,15 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
         viewport={"width": spec.viewport.width, "height": spec.viewport.height},
         window_size={"width": spec.viewport.width, "height": spec.viewport.height},
         # Browser-use downloads its ad-block/cookie extensions at startup, which
-        # noisily fails (and is useless for demos). Turn them off. The launch
-        # flag --extensions-on-chrome-urls exists only for those extensions and
-        # triggers an unsupported-flag warning banner in headed mode.
+        # noisily fails (and is useless for demos). Turn them off. These launch
+        # flags exist for its agent/stealth behavior and each triggers Chrome's
+        # "unsupported command-line flag" warning banner in headed mode.
         enable_default_extensions=False,
-        ignore_default_args=["--extensions-on-chrome-urls"],
+        ignore_default_args=[
+            "--extensions-on-chrome-urls",
+            "--disable-blink-features=AutomationControlled",
+            "--allow-pre-commit-input",
+        ],
         # We manage recording ourselves; disable browser-use's auto-recorder.
         record_video_dir=None,
     )
