@@ -1,0 +1,21 @@
+{
+  "viewport": { "width": 1280, "height": 800 },
+  "headless": false,
+  "output_dir": "./demo_out",
+  "delay_ms": 250,
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:3000" },
+    { "action": "click", "selector": "#get-started" },
+    { "action": "wait", "seconds": 1.0 },
+    {
+      "action": "type",
+      "selector": "input[name=email]",
+      "text": "demo@acme.com",
+      "type_delay_ms": 70
+    },
+    { "action": "select", "selector": "select#plan", "option": "pro" },
+    { "action": "click", "selector": "#continue" },
+    { "action": "assert_text", "text": "Welcome" },
+    { "action": "done" }
+  ]
+}
