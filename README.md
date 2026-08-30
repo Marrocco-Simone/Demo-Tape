@@ -60,6 +60,7 @@ Each step is a flat object with an `action` plus its params:
 
 ```json
 { "action": "navigate", "url": "http://localhost:3000", "wait_seconds": 1.0 }
+{ "action": "back", "wait_seconds": 1.0 }
 { "action": "wait", "seconds": 1.0 }
 { "action": "click", "selector": "#get-started" }
 { "action": "type", "selector": "input[name=email]", "text": "demo@acme.com", "type_delay_ms": 70, "clear": true }

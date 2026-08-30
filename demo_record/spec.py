@@ -29,6 +29,15 @@ class NavigateStep(BaseModel):
     )
 
 
+class BackStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["back"]
+    wait_seconds: float = Field(
+        default=1.0, ge=0, description="Extra settle time after the history navigation."
+    )
+
+
 class WaitStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -135,6 +144,7 @@ class DoneStep(BaseModel):
 Step = Annotated[
     Union[
         NavigateStep,
+        BackStep,
         WaitStep,
         ClickStep,
         HighlightStep,

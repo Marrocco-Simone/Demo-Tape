@@ -310,6 +310,22 @@ class ActionRunner:
     async def wait(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
 
+    async def back(self, wait_seconds: float) -> None:
+        client, session_id = await self._cdp()
+        history = await client.send.Page.getNavigationHistory(session_id=session_id)
+        idx = history.get("currentIndex", 0)
+        if idx <= 0:
+            raise ActionError("no previous page in history to go back to")
+        entry_id = history["entries"][idx - 1]["id"]
+        await client.send.Page.navigateToHistoryEntry(
+            params={"entryId": entry_id}, session_id=session_id
+        )
+        await self._wait_for_load()
+        if self._overlay:
+            await self._render_overlay()
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
+
     async def highlight(self, selector: str, duration_seconds: float, spotlight: bool) -> None:
         await self._scroll_into_center(selector)
         await self._fx_ring(selector, max(int(duration_seconds * 1000), 300), spotlight)
@@ -454,6 +470,8 @@ class ActionRunner:
         action = step.action
         if action == "navigate":
             await self.navigate(step.url, step.wait_seconds)
+        elif action == "back":
+            await self.back(step.wait_seconds)
         elif action == "wait":
             await self.wait(step.seconds)
         elif action == "click":
