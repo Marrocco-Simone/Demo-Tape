@@ -97,6 +97,19 @@ class AssertTextStep(BaseModel):
 
     action: Literal["assert_text"]
     text: str = Field(description="Text that must be present in the page body.")
+    case_sensitive: bool = Field(
+        default=False,
+        description="By default the match is case-insensitive, because CSS text-transform "
+        "(e.g. uppercase labels) changes what innerText returns vs the source.",
+    )
+
+
+class AssertValueStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["assert_value"]
+    selector: str = Field(description="CSS selector of the input, textarea or select to check.")
+    value: str = Field(description="Exact value the element must hold (what a controlled input actually kept).")
 
 
 class DoneStep(BaseModel):
@@ -116,6 +129,7 @@ Step = Annotated[
         TitleStep,
         DescriptionStep,
         AssertTextStep,
+        AssertValueStep,
         DoneStep,
     ],
     Field(discriminator="action"),

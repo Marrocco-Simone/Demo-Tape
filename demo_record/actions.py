@@ -47,10 +47,6 @@ class DoneSignal(Exception):
     """Raised by the `done` step to end the pipeline cleanly."""
 
 
-# Keys that should produce a real character via `Input.insertText` rather than a
-# synthesized keydown/keyup pair. This keeps input events natural for the page.
-_TYPEABLE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 `~!@#$%^&*()_+-=[]{}\\|;:'\",<.>/?")
-
 _ALIGN_TO_JUSTIFY = {"left": "flex-start", "center": "center", "right": "flex-end"}
 
 
@@ -257,23 +253,18 @@ class ActionRunner:
 
         client, session_id = await self._cdp()
         for ch in text:
-            if ch in _TYPEABLE:
-                # keyDown -> insertText -> keyUp produces a real char + input events.
-                await client.send.Input.dispatchKeyEvent(
-                    params={"type": "keyDown", "text": ch}, session_id=session_id
-                )
-                await client.send.Input.dispatchKeyEvent(
-                    params={"type": "keyUp", "text": ch}, session_id=session_id
-                )
-            else:
-                # Non-ASCII / symbols: use rawKeyDown + insertText for reliability.
-                await client.send.Input.dispatchKeyEvent(
-                    params={"type": "rawKeyDown"}, session_id=session_id
-                )
-                await client.send.Input.insertText(params={"text": ch}, session_id=session_id)
-                await client.send.Input.dispatchKeyEvent(
-                    params={"type": "keyUp"}, session_id=session_id
-                )
+            # Every character goes through Input.insertText: it fires a real
+            # input event that React-controlled inputs accept. Plain
+            # dispatchKeyEvent with only type+text is dropped by React's
+            # synthetic event layer (the DOM keeps the char, state does not,
+            # so controlled inputs revert to empty).
+            await client.send.Input.dispatchKeyEvent(
+                params={"type": "keyDown", "key": ch}, session_id=session_id
+            )
+            await client.send.Input.insertText(params={"text": ch}, session_id=session_id)
+            await client.send.Input.dispatchKeyEvent(
+                params={"type": "keyUp", "key": ch}, session_id=session_id
+            )
             if type_delay_ms > 0:
                 await asyncio.sleep(type_delay_ms / 1000.0)
 
@@ -303,27 +294,47 @@ class ActionRunner:
     async def scroll(self, selector: str) -> None:
         await self._scroll_into_center(selector)
 
-    async def assert_text(self, text: str) -> None:
+    async def assert_text(self, text: str, case_sensitive: bool = False) -> None:
         expr = """
 (() => {
   const want = %s;
+  const caseSensitive = %s;
   const url = location.href;
   const body = document.body ? document.body.innerText : '';
   const re = /\\s+/g;
-  const norm = s => s.replace(re, ' ');
+  const norm = s => { const t = s.replace(re, ' '); return caseSensitive ? t : t.toLowerCase(); };
   // Plain substring first (exact presence).
-  if (body.includes(want)) return { found: true, url, snippet: '' };
-  // Whitespace-tolerant check (survives newlines/extra spaces in the page).
-  if (norm(body).includes(norm(want))) return { found: true, url, snippet: '' };
+  if (body.includes(want) || norm(body).includes(norm(want))) return { found: true, url, snippet: '' };
   return { found: false, url, snippet: norm(body).slice(0, 200) };
 })()
-""" % json.dumps(text)
+""" % (json.dumps(text), json.dumps(case_sensitive))
         value = await self._eval(expr)
         if not value or not value.get("found"):
             url = (value or {}).get("url", "unknown url")
             snippet = (value or {}).get("snippet", "")
             raise ActionError(
                 f'assert_text failed: "{text}" not found at {url}. page says: "{snippet}..."'
+            )
+
+    async def assert_value(self, selector: str, value: str) -> None:
+        await self._scroll_into_center(selector)
+        expr = f"""
+(() => {{
+  const el = document.querySelector({json.dumps(selector)});
+  if (!el) return {{ ok: false, reason: 'selector not found', url: location.href, actual: null }};
+  if (el.value === undefined) return {{ ok: false, reason: 'element has no value', url: location.href, actual: null }};
+  return {{ ok: true, url: location.href, actual: String(el.value) }};
+}})()
+"""
+        result = await self._eval(expr)
+        if not result or not result.get("ok"):
+            reason = (result or {}).get("reason", "unknown")
+            url = (result or {}).get("url", "unknown url")
+            raise ActionError(f'assert_value failed on "{selector}" ({reason}) at {url}')
+        actual = result.get("actual") or ""
+        if actual != value:
+            raise ActionError(
+                f'assert_value failed: "{selector}" holds "{actual}", expected "{value}" at {result.get("url")}'
             )
 
     async def done(self) -> None:
@@ -350,7 +361,9 @@ class ActionRunner:
         elif action == "description":
             await self.description(step.text, step.position, step.align)
         elif action == "assert_text":
-            await self.assert_text(step.text)
+            await self.assert_text(step.text, step.case_sensitive)
+        elif action == "assert_value":
+            await self.assert_value(step.selector, step.value)
         elif action == "done":
             await self.done()
         else:  # pragma: no cover - pydantic discriminates, so unreachable

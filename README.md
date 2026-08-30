@@ -52,6 +52,7 @@ Each step is a flat object with an `action` plus its params:
 { "action": "title", "text": "Sign up", "position": "top", "align": "left" }
 { "action": "description", "text": "Choose a plan to unlock athletes", "position": "bottom", "align": "center" }
 { "action": "assert_text", "text": "Welcome" }
+{ "action": "assert_value", "selector": "input[name=email]", "value": "demo@acme.com" }
 { "action": "done" }
 ```
 
@@ -63,14 +64,20 @@ Notes:
   smooth-scroll the element to the vertical center of the viewport and pause, so
   interactions are visible on video and you never hand-tune scroll offsets.
 - **`type`** types the final text letter-by-letter (`type_delay_ms` controls the
-  cadence) — it looks human on video. Set `clear: false` to append.
+  cadence) — it looks human on video, and each character is inserted via CDP
+  `Input.insertText`, so **React-controlled inputs keep the text** (plain key
+  events alone get reverted by React's synthetic event layer). Set
+  `clear: false` to append.
 - **`select`** scrolls to a native `<select>`, picks the option (by value or
   visible label), and fires `input`/`change` events.
-- **`assert_text`** stops the pipeline (error) if the text is not in the page body.
-  The check is whitespace-tolerant (extra newlines/spaces are fine). On failure the
-  error includes the **current URL** and a slice of what the page actually says —
-  this is usually enough to spot a redirect (e.g. a locale middleware sending you
-  to `/en`) immediately.
+- **`assert_text`** stops the pipeline (error) if the text is not in the page
+  body. Matching is **case-insensitive by default** (CSS `text-transform` like
+  uppercase labels would otherwise break asserts written from source); pass
+  `"case_sensitive": true` for exact matching. On failure the error includes
+  the **current URL** and a slice of what the page actually says.
+- **`assert_value`** stops the pipeline unless the element (input, textarea,
+  select) holds exactly `value`. Use it right after `type`/`select` to catch a
+  field silently dropping input — `assert_text` can't see input values.
 - **`title` / `description`** render narration text on the video, live: fixed,
   pointer-transparent pills injected into the app page. The description uses a
   smaller font and can carry more text; long text wraps instead of being cut
