@@ -97,16 +97,25 @@ class _ScreencastRecorder:
             self._first_ts = ts
             self._first_wall = time.monotonic()
         if ts is not None and self._last_ts is not None and self._last_data is not None:
+            elapsed = ts - self._last_ts
+            # Screencast bursts above the target framerate during animations;
+            # extra frames stretch a fixed-fps video, so drop sub-frame gaps.
+            if elapsed < 0.85 / self._framerate:
+                self._ack_soon(event)
+                return
             # Chromium only repaints on change, so an idle second sends no
             # frames. Hold the previous frame across the gap or the video
             # loses every pause and plays back frantic.
-            gap = int(round((ts - self._last_ts) * self._framerate)) - 1
+            gap = int(round(elapsed * self._framerate)) - 1
             for _ in range(max(0, min(gap, self._framerate * 30))):
                 self._recorder.add_frame(self._last_data)
         self._recorder.add_frame(data)
         if ts is not None:
             self._last_ts = ts
         self._last_data = data
+        self._ack_soon(event)
+
+    def _ack_soon(self, event) -> None:
         # Acknowledge so Chromium keeps sending frames. Keep a strong reference
         # to the task so it isn't garbage-collected mid-flight.
         task = asyncio.ensure_future(self._ack(event))
@@ -263,6 +272,13 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
         viewport={"width": spec.viewport.width, "height": spec.viewport.height},
         window_size={"width": spec.viewport.width, "height": window_height},
         user_data_dir=user_data_dir,
+        # browser-use merges this with its own --disable-features list. The
+        # breach warning ignores the Preferences-only kill switch, so the
+        # feature flags are the reliable layer.
+        args=[
+            "--disable-features=PasswordLeakDetection,PasswordManagerOnboarding,"
+            "AutofillEnableAccountWalletStorage,TranslateUI,DefaultBrowserPromptEnabled"
+        ],
         # Prefer a standalone Chromium when one is installed (playwright cache
         # or /Applications); otherwise browser-use's fallback finds system
         # Chrome. executable_path is strict: no silent fallback beyond this.

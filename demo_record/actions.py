@@ -38,6 +38,74 @@ _OVERLAY_BAR_CSS = (
 _TITLE_LINE_CSS = "font-size:26px;font-weight:700;line-height:1.25;color:#f8fafc;"
 _DESCRIPTION_LINE_CSS = "font-size:17px;font-weight:400;line-height:1.45;color:#cbd5e1;white-space:pre-wrap;"
 
+# Click/typing feedback: sky blue reads on light and dark apps alike.
+_FX_ACCENT = "#38bdf8"
+# Click choreography: ring appears first, then ripples, then the real click.
+CLICK_RING_MS = 1400
+RING_LEAD_S = 0.45
+RIPPLE_LEAD_S = 0.55
+
+_FX_SCRIPT = f"""
+(() => {{
+  if (!window.__demoFx) {{
+  if (!document.getElementById('demo-record-fx-style')) {{
+    const style = document.createElement('style');
+    style.id = 'demo-record-fx-style';
+    style.textContent = `
+      @keyframes demoRingBreath {{ 0%,100% {{ transform: scale(1); }} 50% {{ transform: scale(1.03); }} }}
+      @keyframes demoRipple {{
+        from {{ transform: translate(-50%,-50%) scale(1); opacity: 0.85; }}
+        to {{ transform: translate(-50%,-50%) scale(9); opacity: 0; }}
+      }}
+    `;
+    document.head.appendChild(style);
+  }}
+  window.__demoFx = {{
+    ring(selector, opts) {{
+      const el = document.querySelector(selector);
+      if (!el) return {{ ok: false }};
+      const ms = (opts && opts.durationMs) || 1500;
+      const spotlight = !!(opts && opts.spotlight);
+      const r = el.getBoundingClientRect();
+      const pad = 8;
+      const ring = document.createElement('div');
+      ring.id = 'demo-record-fx-ring';
+      ring.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483644;'
+        + 'border:3px solid {_FX_ACCENT};border-radius:12px;'
+        + 'box-shadow:0 0 0 4px rgba(56,189,248,0.25), 0 0 26px rgba(56,189,248,0.55)'
+        + (spotlight ? ', 0 0 0 9999px rgba(15,23,42,0.45);' : ';')
+        + 'left:' + (r.left - pad) + 'px;top:' + (r.top - pad) + 'px;'
+        + 'width:' + (r.width + pad*2) + 'px;height:' + (r.height + pad*2) + 'px;'
+        + 'animation:demoRingBreath 1.1s ease-in-out infinite;';
+      (document.body || document.documentElement).appendChild(ring);
+      setTimeout(() => ring.remove(), ms);
+      return {{ ok: true }};
+    }},
+    ripple(selector) {{
+      const el = document.querySelector(selector);
+      if (!el) return {{ ok: false }};
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      for (let i = 0; i < 3; i++) {{
+        const wave = document.createElement('div');
+        wave.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483645;'
+          + 'left:' + cx + 'px;top:' + cy + 'px;width:14px;height:14px;border-radius:50%;'
+          + 'border:2.5px solid {_FX_ACCENT};'
+          + 'animation:demoRipple 0.85s ease-out forwards;'
+          + 'animation-delay:' + (i * 0.13) + 's;opacity:0;'
+          + 'transform:translate(-50%,-50%);';
+        (document.body || document.documentElement).appendChild(wave);
+        setTimeout(() => wave.remove(), 1400 + i * 130);
+      }}
+      return {{ ok: true }};
+    }},
+  }};
+  }}
+  return {{ ok: true }};
+}})()
+"""
+
 
 class ActionError(Exception):
     """A step failed in a way that should be surfaced to the user/model."""
@@ -204,6 +272,29 @@ class ActionRunner:
                 raise ActionError(f"page did not finish loading within {timeout_s:.0f}s")
             await asyncio.sleep(0.1)
 
+    # -- click/type feedback (ring + ripples) -----------------------------------
+
+    async def _ensure_fx(self) -> None:
+        value = await self._eval(_FX_SCRIPT)
+        if not value or not value.get("ok"):
+            raise ActionError("could not inject click feedback effects into the page")
+
+    async def _fx_ring(self, selector: str, duration_ms: int, spotlight: bool = False) -> None:
+        await self._ensure_fx()
+        expr = (
+            f"window.__demoFx.ring({json.dumps(selector)}, "
+            f"{{durationMs: {int(duration_ms)}, spotlight: {str(spotlight).lower()}}})"
+        )
+        value = await self._eval(expr)
+        if not value or not value.get("ok"):
+            raise ActionError(f'selector "{selector}" not found for highlight')
+
+    async def _fx_ripple(self, selector: str) -> None:
+        await self._ensure_fx()
+        value = await self._eval(f"window.__demoFx.ripple({json.dumps(selector)})")
+        if not value or not value.get("ok"):
+            raise ActionError(f'selector "{selector}" not found for ripple')
+
     # -- individual actions -------------------------------------------------
 
     async def navigate(self, url: str, wait_seconds: float) -> None:
@@ -219,8 +310,20 @@ class ActionRunner:
     async def wait(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
 
+    async def highlight(self, selector: str, duration_seconds: float, spotlight: bool) -> None:
+        await self._scroll_into_center(selector)
+        await self._fx_ring(selector, max(int(duration_seconds * 1000), 300), spotlight)
+        if duration_seconds > 0:
+            await asyncio.sleep(duration_seconds)
+
     async def click(self, selector: str) -> None:
         await self._scroll_into_center(selector)
+        # Visible choreography before the real click: the element lights up,
+        # waves spread from its center, then the click lands.
+        await self._fx_ring(selector, CLICK_RING_MS)
+        await asyncio.sleep(RING_LEAD_S)
+        await self._fx_ripple(selector)
+        await asyncio.sleep(RIPPLE_LEAD_S)
         expr = f"""
 (() => {{
   const el = document.querySelector({json.dumps(selector)});
@@ -250,6 +353,11 @@ class ActionRunner:
         value = await self._eval(focus_expr)
         if not value or not value.get("ok"):
             raise ActionError(f'could not focus selector "{selector}" for typing')
+
+        # Ring the field for as long as the typing takes, so the recording
+        # shows which element is receiving the text.
+        type_duration_ms = len(text) * type_delay_ms + 900
+        await self._fx_ring(selector, type_duration_ms)
 
         client, session_id = await self._cdp()
         for ch in text:
@@ -350,6 +458,8 @@ class ActionRunner:
             await self.wait(step.seconds)
         elif action == "click":
             await self.click(step.selector)
+        elif action == "highlight":
+            await self.highlight(step.selector, step.duration_seconds, step.spotlight)
         elif action == "type":
             await self.type(step.selector, step.text, step.type_delay_ms, step.clear)
         elif action == "select":

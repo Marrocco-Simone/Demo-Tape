@@ -65,6 +65,7 @@ Each step is a flat object with an `action` plus its params:
 { "action": "type", "selector": "input[name=email]", "text": "demo@acme.com", "type_delay_ms": 70, "clear": true }
 { "action": "select", "selector": "select#plan", "option": "pro" }
 { "action": "scroll", "selector": "#pricing" }
+{ "action": "highlight", "selector": "#pricing", "duration_seconds": 2.0, "spotlight": false }
 { "action": "title", "text": "Sign up", "position": "top", "align": "left" }
 { "action": "description", "text": "Choose a plan to unlock athletes", "position": "bottom", "align": "center" }
 { "action": "assert_text", "text": "Welcome" }
@@ -76,9 +77,19 @@ Notes:
 
 - **Elements are targeted by CSS selector** (not element index). Your agent reads
   the selectors from the code it wrote.
-- **Auto-scroll into center**: `click`, `type`, `select`, and `scroll` first
-  smooth-scroll the element to the vertical center of the viewport and pause, so
-  interactions are visible on video and you never hand-tune scroll offsets.
+- **Click/typing feedback is automatic**: every `click` first draws a breathing
+  ring around the element, then ripple waves spread from its center (like circles
+  on still water), then the real click lands. `type` rings the input for as long
+  as the typing takes. All effects are DOM overlays injected by the recorder —
+  they work on any page and never touch the app's own styles.
+- **`highlight`** draws the same ring on any element (a section, a div, a card)
+  without clicking it — use it to guide attention. Add `"spotlight": true` to dim
+  the rest of the page while the element is highlighted. `duration_seconds`
+  controls how long the ring stays (default 2s).
+- **Auto-scroll into center**: `click`, `type`, `select`, `highlight`, and
+  `scroll` first smooth-scroll the element to the vertical center of the viewport
+  and pause, so interactions are visible on video and you never hand-tune scroll
+  offsets.
 - **`type`** types the final text letter-by-letter (`type_delay_ms` controls the
   cadence) — it looks human on video, and each character is inserted via CDP
   `Input.insertText`, so **React-controlled inputs keep the text** (plain key

@@ -43,6 +43,20 @@ class ClickStep(BaseModel):
     selector: str = Field(description="CSS selector of the element to click.")
 
 
+class HighlightStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["highlight"]
+    selector: str = Field(description="CSS selector of the element to spotlight.")
+    duration_seconds: float = Field(
+        default=2.0, ge=0, description="How long the ring stays on the element, in seconds."
+    )
+    spotlight: bool = Field(
+        default=False,
+        description="Dim the rest of the page while the element is highlighted.",
+    )
+
+
 class TypeStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -123,6 +137,7 @@ Step = Annotated[
         NavigateStep,
         WaitStep,
         ClickStep,
+        HighlightStep,
         TypeStep,
         SelectStep,
         ScrollStep,

@@ -30,6 +30,12 @@ EXAMPLE = {
         {"action": "click", "selector": "#get-started"},
         {"action": "wait", "seconds": 1.0},
         {
+            "action": "highlight",
+            "selector": "#form",
+            "duration_seconds": 2.0,
+            "spotlight": True,
+        },
+        {
             "action": "type",
             "selector": "input[name=email]",
             "text": "demo@acme.com",
