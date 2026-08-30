@@ -15,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class Viewport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    width: int = Field(default=1280, ge=1)
-    height: int = Field(default=800, ge=1)
+    width: int = Field(default=1920, ge=1)
+    height: int = Field(default=1080, ge=1)
 
 
 class NavigateStep(BaseModel):
@@ -144,7 +144,7 @@ class DemoSpec(BaseModel):
         default=False, description="Run without a visible window. Video is recorded either way."
     )
     output_dir: str = Field(
-        default="./demo_out", description="Directory for video.mp4, steps/ and error.png."
+        default="./demo_out", description="Directory for video.mp4 and error.png."
     )
     delay_ms: int = Field(
         default=500,

@@ -121,15 +121,19 @@ async def _save_error_screenshot(browser: BrowserSession, path: Path) -> Path | 
 
 async def run_pipeline(spec: DemoSpec) -> RunResult:
     output_dir = Path(spec.output_dir).expanduser().resolve()
-    steps_dir = output_dir / "steps"
-    steps_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     video_path = output_dir / "video.mp4"
     size = ViewportSize(width=spec.viewport.width, height=spec.viewport.height)
+
+    # In headed mode the browser UI (tab strip + address bar) takes the top of
+    # the window, so a window the size of the viewport cuts off the bottom of
+    # the page when watching live. Headless has no UI; sizes match exactly.
+    window_height = spec.viewport.height + (120 if not spec.headless else 0)
 
     browser = BrowserSession(
         headless=spec.headless,
         viewport={"width": spec.viewport.width, "height": spec.viewport.height},
-        window_size={"width": spec.viewport.width, "height": spec.viewport.height},
+        window_size={"width": spec.viewport.width, "height": window_height},
         # Browser-use downloads its ad-block/cookie extensions at startup, which
         # noisily fails (and is useless for demos). Turn them off. These launch
         # flags exist for its agent/stealth behavior and each triggers Chrome's
@@ -224,13 +228,6 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                 break
             if spec.delay_ms > 0:
                 await asyncio.sleep(spec.delay_ms / 1000.0)
-            # Per-step screenshot for review, taken once the page has settled
-            # (after the delay) so overlay fade-ins don't appear half-finished.
-            try:
-                shot_bytes: bytes = await browser.take_screenshot()
-                (steps_dir / f"step_{index:02d}.png").write_bytes(shot_bytes)
-            except Exception:  # noqa: BLE001 - screenshots are best-effort
-                logger.warning("step %d: screenshot failed", index, exc_info=True)
 
         if stop_reason is not None:
             shot = await _save_error_screenshot(browser, output_dir / "error.png")

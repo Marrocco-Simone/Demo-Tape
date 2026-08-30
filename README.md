@@ -1,9 +1,9 @@
 # demo-record
 
 Deterministic browser demo recorder. It runs a JSON action pipeline in Chromium,
-records an MP4 of the whole session, saves a screenshot after every step, and
-reports a strict success/error contract. **No LLM, no agent loop** — the pipeline
-is written once (typically by your coding agent) and replayed deterministically.
+records an MP4 of the whole session, and reports a strict success/error
+contract. **No LLM, no agent loop** — the pipeline is written once (typically by
+your coding agent) and replayed deterministically.
 
 Built on top of [`browser-use`](https://github.com/browser-use/browser-use) for
 its Chromium/CDP plumbing (video recorder, per-keystroke typing, screenshots),
@@ -34,9 +34,9 @@ A pipeline is a JSON object:
 
 | field        | type    | default       | meaning |
 |--------------|---------|---------------|---------|
-| `viewport`   | object  | `{1280, 800}` | Browser viewport size. |
+| `viewport`   | object  | `{1920, 1080}` | Page viewport = video size. |
 | `headless`   | bool    | `false`       | Run without a visible window (video still records). |
-| `output_dir` | string  | `./demo_out`  | Where `video.mp4`, `steps/`, `error.png` go. |
+| `output_dir` | string  | `./demo_out`  | Where `video.mp4` and `error.png` go. |
 | `delay_ms`   | int     | `500`         | Pause after **every** step. Use `wait` steps for longer pauses. |
 | `steps`      | array   | —             | Ordered list of steps (below). |
 
@@ -112,8 +112,7 @@ Notes:
 
 ## Output contract
 
-- **Success** → exit code `0`, prints `VIDEO_OK <output_dir>/video.mp4`
-  (plus `steps/step_01.png` … for review).
+- **Success** → exit code `0`, prints `VIDEO_OK <output_dir>/video.mp4`.
 - **Failure** → exit code `1`, prints
   `ERROR step N <action>: <message>` and `LAST_SCREENSHOT <output_dir>/error.png`,
   plus `VIDEO_PARTIAL <output_dir>/video.mp4` (footage up to the break).
