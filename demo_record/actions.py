@@ -132,8 +132,11 @@ class ActionRunner:
         if (slotTitle) addLine(slotTitle.text, 'title');
         if (slotDesc) addLine(slotDesc.text, 'description');
         const wrap = document.createElement('div');
-        wrap.style.cssText = 'position:fixed;left:0;right:0;display:flex;padding:20px 28px;box-sizing:border-box;'
-          + 'pointer-events:none;'
+        // Neutralize the UA popover defaults (white Canvas background, solid
+        // border, fit-content size, auto margins) before positioning.
+        wrap.style.cssText = 'position:fixed;inset:auto;left:0;right:0;margin:0;'
+          + 'width:auto;height:auto;background:none;border:none;overflow:visible;color:inherit;'
+          + 'display:flex;padding:20px 28px;box-sizing:border-box;pointer-events:none;'
           + (position === 'top' ? 'top:0;' : 'bottom:0;')
           + 'justify-content:' + justify((slotTitle || slotDesc).align) + ';';
         wrap.appendChild(bar);
