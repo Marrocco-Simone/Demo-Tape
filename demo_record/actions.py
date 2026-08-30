@@ -423,6 +423,160 @@ class ActionRunner:
             if type_delay_ms > 0:
                 await asyncio.sleep(type_delay_ms / 1000.0)
 
+    async def _measure_box(self, selector: str) -> dict[str, Any] | None:
+        """Viewport-relative bounding box of `selector`, or None if missing."""
+        return await self._eval(
+            f"""
+(() => {{
+  const el = document.querySelector({json.dumps(selector)});
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return {{
+    x: r.x, y: r.y, w: r.width, h: r.height,
+    visible: r.top >= 0 && r.left >= 0
+      && r.bottom <= window.innerHeight && r.right <= window.innerWidth,
+  }};
+}})()
+"""
+        )
+
+    async def _drag_point(
+        self, box: dict[str, float], fraction: float, axis: str
+    ) -> tuple[float, float]:
+        """Point at `fraction` along the box, clamped 1px inside so boundary
+        events hit the element instead of its neighbor."""
+        if axis == "y":
+            px = box["x"] + box["w"] / 2
+            py = box["y"] + box["h"] * fraction
+        else:
+            px = box["x"] + box["w"] * fraction
+            py = box["y"] + box["h"] / 2
+        px = min(max(px, box["x"] + 1), box["x"] + box["w"] - 1)
+        py = min(max(py, box["y"] + 1), box["y"] + box["h"] - 1)
+        return px, py
+
+    async def drag(
+        self,
+        selector: str,
+        to: float,
+        from_: float | None,
+        to_selector: str | None,
+        duration_seconds: float,
+        axis: str,
+    ) -> None:
+        """Press on `selector` and drag the pointer to `to_selector` (or across
+        `selector` itself) with real CDP mouse events.
+
+        React Native Web sliders (and similar pointer-driven controls) read the
+        value from the responder system's pointer position, so el.click() does
+        nothing for them — and they snap the value to the press point, which is
+        why same-element drags start at the edge by default. Drag-and-drop
+        lists reorder on the same press → interpolated moves → release sequence.
+        """
+        if from_ is None:
+            from_ = 0.5 if to_selector and to_selector != selector else 0.0
+        await self._scroll_into_center(selector)
+        # Ring press (and drop) targets for as long as the drag takes, so the
+        # recording shows which elements are involved.
+        ring_ms = max(int(duration_seconds * 1000), 300)
+        await self._fx_ring(selector, ring_ms)
+        release_on_self = not to_selector or to_selector == selector
+        if not release_on_self:
+            await self._fx_ring(to_selector, ring_ms)
+
+        press_box = await self._measure_box(selector)
+        if not press_box or press_box["w"] <= 0 or press_box["h"] <= 0:
+            raise ActionError(f'selector "{selector}" not found (or has no size) for drag')
+
+        if release_on_self:
+            release_box = press_box
+        else:
+            to_sel: str = to_selector
+            release_box = await self._measure_box(to_sel)
+            if not release_box or release_box["w"] <= 0 or release_box["h"] <= 0:
+                raise ActionError(
+                    f'selector "{to_sel}" not found (or has no size) for drag release'
+                )
+            if not release_box["visible"]:
+                await self._scroll_into_center(to_sel)
+                release_box = await self._measure_box(to_sel)
+                if (
+                    not release_box
+                    or release_box["w"] <= 0
+                    or release_box["h"] <= 0
+                    or not release_box["visible"]
+                ):
+                    raise ActionError(
+                        f'cannot drag between "{selector}" and "{to_sel}": '
+                        "they do not fit in the viewport at the same time"
+                    )
+            # Scrolling the drop target in can push the press target out of
+            # view; the press point must then be re-derived or the press event
+            # lands outside the window and hits nothing.
+            press_box = await self._measure_box(selector)
+            if (
+                not press_box
+                or press_box["w"] <= 0
+                or press_box["h"] <= 0
+                or not press_box["visible"]
+            ):
+                raise ActionError(
+                    f'cannot drag between "{selector}" and "{to_sel}": '
+                    "they do not fit in the viewport at the same time"
+                )
+
+        x0, y0 = await self._drag_point(press_box, from_, axis)
+        x1, y1 = await self._drag_point(release_box, to, axis)
+
+        client, session_id = await self._cdp()
+        await client.send.Input.dispatchMouseEvent(
+            params={"type": "mouseMoved", "x": x0, "y": y0, "button": "none", "buttons": 0},
+            session_id=session_id,
+        )
+        await asyncio.sleep(0.05)
+        await client.send.Input.dispatchMouseEvent(
+            params={
+                "type": "mousePressed",
+                "x": x0,
+                "y": y0,
+                "button": "left",
+                "clickCount": 1,
+                "buttons": 1,
+            },
+            session_id=session_id,
+        )
+        await asyncio.sleep(0.08)
+        moves = min(60, max(12, int(duration_seconds / 0.03)))
+        step_delay = duration_seconds / moves
+        for i in range(1, moves + 1):
+            # Ease-in-out: a hand accelerates into the drag and settles at the
+            # end; constant velocity reads as robotic on video.
+            t = i / moves
+            e = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
+            await client.send.Input.dispatchMouseEvent(
+                params={
+                    "type": "mouseMoved",
+                    "x": x0 + (x1 - x0) * e,
+                    "y": y0 + (y1 - y0) * e,
+                    "button": "left",
+                    "buttons": 1,
+                },
+                session_id=session_id,
+            )
+            if step_delay > 0:
+                await asyncio.sleep(step_delay)
+        await client.send.Input.dispatchMouseEvent(
+            params={
+                "type": "mouseReleased",
+                "x": x1,
+                "y": y1,
+                "button": "left",
+                "clickCount": 1,
+                "buttons": 0,
+            },
+            session_id=session_id,
+        )
+
     async def select(self, selector: str, option: str) -> None:
         await self._scroll_into_center(selector)
         expr = f"""
@@ -513,6 +667,10 @@ class ActionRunner:
             await self.highlight(step.selector, step.duration_seconds, step.spotlight)
         elif action == "type":
             await self.type(step.selector, step.text, step.type_delay_ms, step.clear)
+        elif action == "drag":
+            await self.drag(
+                step.selector, step.to, step.from_, step.to_selector, step.duration_seconds, step.axis
+            )
         elif action == "select":
             await self.select(step.selector, step.option)
         elif action == "scroll":

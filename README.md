@@ -64,6 +64,8 @@ Each step is a flat object with an `action` plus its params:
 { "action": "wait", "seconds": 1.0 }
 { "action": "click", "selector": "#get-started" }
 { "action": "type", "selector": "input[name=email]", "text": "demo@acme.com", "type_delay_ms": 70, "clear": true }
+{ "action": "drag", "selector": "[role=slider]", "to": 0.7, "duration_seconds": 0.6, "axis": "x" }
+{ "action": "drag", "selector": "#task-card-3", "to_selector": "#column-done" }
 { "action": "select", "selector": "select#plan", "option": "pro" }
 { "action": "scroll", "selector": "#pricing" }
 { "action": "highlight", "selector": "#pricing", "duration_seconds": 2.0, "spotlight": false }
@@ -87,7 +89,7 @@ Notes:
   without clicking it — use it to guide attention. Add `"spotlight": true` to dim
   the rest of the page while the element is highlighted. `duration_seconds`
   controls how long the ring stays (default 2s).
-- **Auto-scroll into center**: `click`, `type`, `select`, `highlight`, and
+- **Auto-scroll into center**: `click`, `type`, `select`, `highlight`, `drag`, and
   `scroll` first smooth-scroll the element to the vertical center of the viewport
   and pause, so interactions are visible on video and you never hand-tune scroll
   offsets.
@@ -98,6 +100,19 @@ Notes:
   `clear: false` to append.
 - **`select`** scrolls to a native `<select>`, picks the option (by value or
   visible label), and fires `input`/`change` events.
+- **`drag`** moves the pointer with real CDP mouse events (press → interpolated
+  moves → release). Without `to_selector` it drags across `selector` itself —
+  use for React Native Web sliders (`role="slider"` divs; a plain click moves
+  nothing because the value comes from the pointer position): `to`/`from` are
+  positions along the element's box (0.0 edge, 0.5 center, 1.0 other edge),
+  `axis: "y"` for vertical tracks. With `to_selector` it drags element A and
+  releases on element B — drag-to-reorder lists, drop zones. The travel is a
+  straight line spread over `duration_seconds` so it looks human, both elements
+  are ringed, and both must be on screen at once.
+  Sliders snap their value to the *press* point, so same-element drags start at
+  the edge by default. To move a slider that already holds a value without that
+  snap, press on its thumb and release on the track:
+  `{ "action": "drag", "selector": "[role=slider] .thumb", "to_selector": "[role=slider]", "to": 0.7 }`.
 - **`assert_text`** stops the pipeline (error) if the text is not in the page
   body. Matching is **case-insensitive by default** (CSS `text-transform` like
   uppercase labels would otherwise break asserts written from source); pass

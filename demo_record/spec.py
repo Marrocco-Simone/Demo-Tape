@@ -80,6 +80,49 @@ class TypeStep(BaseModel):
     )
 
 
+class DragStep(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    action: Literal["drag"]
+    selector: str = Field(
+        description="CSS selector of the element to PRESS on. For sliders this is the track "
+        "(React Native Web sliders render divs with role=\"slider\", no <input type=range>). "
+        "For drag-and-drop it is the card/item to pick up."
+    )
+    to_selector: str | None = Field(
+        default=None,
+        description="CSS selector of the element to RELEASE on (drop target). Omit to drag "
+        "across `selector` itself (slider-style: from/to are positions along its box).",
+    )
+    to: float = Field(
+        default=0.5,
+        ge=0,
+        le=1,
+        description="Release position along the release target's box: 0.0 = left/top edge, "
+        "0.5 = center, 1.0 = right/bottom edge.",
+    )
+    from_: float | None = Field(
+        default=None,
+        alias="from",
+        ge=0,
+        le=1,
+        description="Press position along `selector`'s box. Default: 0.0 (edge) when dragging "
+        "across `selector` itself (a slider's value snaps to the press point, so starting at "
+        "an edge avoids a jump), 0.5 (center) when dropping on another element (grab the card "
+        "by its middle). To move a slider that already holds a value without a snap, press on "
+        "its thumb: selector = thumb element, to_selector = the track.",
+    )
+    duration_seconds: float = Field(
+        default=0.6,
+        ge=0.05,
+        description="Total time the pointer takes to travel from the press point to the release "
+        "point, in seconds. The pointer interpolates in a straight line between them.",
+    )
+    axis: Literal["x", "y"] = Field(
+        default="x", description="Direction the from/to fractions run along. Default x."
+    )
+
+
 class SelectStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -149,6 +192,7 @@ Step = Annotated[
         ClickStep,
         HighlightStep,
         TypeStep,
+        DragStep,
         SelectStep,
         ScrollStep,
         TitleStep,
