@@ -142,10 +142,17 @@ Notes:
 
 - **Success** → exit code `0`, prints `VIDEO_OK <output_dir>/video.mp4`.
 - **Failure** → exit code `1`, prints
-  `ERROR step N <action>: <message>` and `LAST_SCREENSHOT <output_dir>/error.png`,
-  plus `VIDEO_PARTIAL <output_dir>/video.mp4` (footage up to the break).
+  `ERROR step N <action>: <message>` (or `ERROR startup: <message>`) and
+  `LAST_SCREENSHOT <output_dir>/error.png`, plus `VIDEO_PARTIAL
+  <output_dir>/video.mp4` when footage exists (up to the break).
+- **Interrupt** (Ctrl+C) → exit code `130`, prints `STOPPED interrupted (Ctrl+C)`
+  plus `LAST_SCREENSHOT` and `VIDEO_PARTIAL`.
+- **Browser closed** → exit code `1`, prints
+  `STOPPED browser was closed (<reason>)` plus `LAST_SCREENSHOT` and
+  `VIDEO_PARTIAL`.
 
-The video is saved even on failure, so you can watch exactly where it broke.
+The video is saved even on failure or stop, so you can watch exactly where it
+broke or what was happening when the run ended.
 
 ## Using it from your coding agents
 
@@ -172,9 +179,11 @@ Rules:
 - ALWAYS run `demo-record --validate demo.json` and fix any errors until it
   prints OK before telling the user it's ready.
 
-The user runs `demo-record demo.json` to produce the video. On failure the tool
-prints `ERROR step N ...` (for assert_text it also prints the final URL + what the
-page says) and `LAST_SCREENSHOT <path>` — report that back.
+The user runs `demo-record demo.json` to produce the video. Exit codes: `0` ok,
+`1` failure or browser closed, `130` interrupted. On failure the tool prints
+`ERROR step N ...` (for assert_text it also prints the final URL + what the
+page says) and `LAST_SCREENSHOT <path>`; on a stop it prints `STOPPED <reason>`
+— report that back.
 ```
 
 ## What it does NOT do (by design)

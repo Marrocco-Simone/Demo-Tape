@@ -18,6 +18,7 @@ import logging
 import os
 import platform
 import queue
+import re
 import shutil
 import signal
 import tempfile
@@ -37,10 +38,13 @@ from demo_record.spec import DemoSpec
 
 logger = logging.getLogger("demo_record")
 
+# Narration steps pair into one visual change; used by the step-loop pacing.
+OVERLAY_ACTIONS = ("title", "description")
+
 
 @dataclass
 class RunResult:
-    ok: bool
+    status: str  # "ok" | "error" | "interrupted" | "stopped"
     video_path: Path
     error: str | None = None
     last_screenshot: Path | None = None
@@ -164,7 +168,9 @@ class _ScreencastRecorder:
 
         Screencast emits nothing once the page goes static, so the stretch
         between the last frame and the end of the run must be filled with the
-        final frame or the closing narration collapses.
+        final frame or the closing narration collapses. Under encoder
+        back-pressure fills are dropped (counted in _dropped), which can leave
+        the file slightly shorter than wall-clock.
         """
         if self._last_data is None:
             return
@@ -186,10 +192,14 @@ class _ScreencastRecorder:
         # Let in-flight frames land before padding the tail.
         await asyncio.sleep(0.15)
         self._fill_to(time.monotonic())
-        self._queue.put(None)
+        # Bounded: a full or dead worker must not hang the event loop here.
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
         loop = asyncio.get_running_loop()
         if self._worker is not None:
-            await loop.run_in_executor(None, self._worker.join)
+            await loop.run_in_executor(None, lambda: self._worker.join(timeout=5.0))
         if self._dropped:
             logger.warning("video: %d frames dropped (encoder fell behind)", self._dropped)
         await loop.run_in_executor(None, self._recorder.stop_and_save)
@@ -205,6 +215,15 @@ async def _save_error_screenshot(browser: BrowserSession, path: Path) -> Path | 
     except Exception:  # noqa: BLE001 - a failed screenshot must not mask the real error
         logger.warning("could not capture error screenshot", exc_info=True)
         return None
+
+
+def _version_sorted(paths: list[str]) -> list[str]:
+    """Sort newest-first, numerically: chromium-1181 beats chromium-999."""
+    return sorted(
+        paths,
+        key=lambda p: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", p)],
+        reverse=True,
+    )
 
 
 def _find_chromium() -> Path | None:
@@ -239,7 +258,7 @@ def _find_chromium() -> Path | None:
             str(home / r"AppData\Local\ms-playwright\chromium-*\chrome-win*\chrome.exe"),
         ]
     for pattern in candidates:
-        for match in sorted(glob.glob(os.path.expandvars(os.path.expanduser(pattern))), reverse=True):
+        for match in _version_sorted(glob.glob(os.path.expandvars(os.path.expanduser(pattern)))):
             exe = Path(match)
             if exe.is_file() and os.access(exe, os.X_OK):
                 return exe
@@ -290,15 +309,16 @@ def _create_quiet_profile() -> Path:
 async def run_pipeline(spec: DemoSpec) -> RunResult:
     output_dir = Path(spec.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Older versions wrote per-step screenshots; a leftover steps/ next to a
-    # fresh video.mp4 reads as if it belonged to this run.
     legacy_steps = output_dir / "steps"
     if legacy_steps.exists():
         shutil.rmtree(legacy_steps)
-    # A stale error.png beside a fresh video.mp4 reads as if this run failed.
-    stale_error = output_dir / "error.png"
-    if stale_error.exists():
-        stale_error.unlink()
+    # Leftovers from an earlier run (a stale error.png or video.mp4, or a
+    # steps/ dir from versions that wrote per-step screenshots) must not sit
+    # beside this run's artifacts.
+    for stale in ("error.png", "video.mp4"):
+        stale_path = output_dir / stale
+        if stale_path.exists():
+            stale_path.unlink()
     video_path = output_dir / "video.mp4"
     size = ViewportSize(width=spec.viewport.width, height=spec.viewport.height)
 
@@ -338,7 +358,8 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             "--disable-blink-features=AutomationControlled",
             "--allow-pre-commit-input",
         ],
-        # We manage recording ourselves; disable browser-use's auto-recorder.
+        # Recording is owned by _ScreencastRecorder below; keep browser-use's
+        # auto-recorder off.
         record_video_dir=None,
     )
 
@@ -351,11 +372,13 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     stop_reason: str | None = None
+    stop_interrupted = False
 
-    def _request_stop(reason: str) -> None:
-        nonlocal stop_reason
+    def _request_stop(reason: str, interrupted: bool = False) -> None:
+        nonlocal stop_reason, stop_interrupted
         if stop_reason is None:
             stop_reason = reason
+            stop_interrupted = interrupted
         stop_event.set()
 
     def _on_browser_stopped(event: Any) -> None:
@@ -364,10 +387,17 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
 
     browser.event_bus.on(BrowserStoppedEvent, _on_browser_stopped)
 
+    # A second Ctrl+C hard-exits immediately; the first is always graceful,
+    # even when the browser-closed event already requested a stop (skipping
+    # cleanup there would truncate the video).
+    signal_count = 0
+
     def _on_signal() -> None:
-        if stop_reason is not None:
+        nonlocal signal_count
+        signal_count += 1
+        if signal_count >= 2:
             os._exit(130)  # second Ctrl+C: force exit without cleanup
-        _request_stop("interrupted (Ctrl+C)")
+        _request_stop("interrupted (Ctrl+C)", interrupted=True)
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -376,9 +406,16 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             pass
 
     try:
-        await browser.start()
-        recorder = _ScreencastRecorder(browser, video_path, size, framerate=30)
-        await recorder.start()
+        try:
+            await browser.start()
+            recorder = _ScreencastRecorder(browser, video_path, size, framerate=30)
+            await recorder.start()
+        except Exception as exc:  # noqa: BLE001 - startup failures still honor the contract
+            return RunResult(
+                status="error",
+                video_path=video_path,
+                error=f"startup: {type(exc).__name__}: {exc}",
+            )
 
         for index, step in enumerate(spec.steps, start=1):
             if stop_event.is_set():
@@ -392,7 +429,7 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             except ActionError as exc:
                 shot = await _save_error_screenshot(browser, output_dir / "error.png")
                 return RunResult(
-                    ok=False,
+                    status="error",
                     video_path=video_path,
                     error=f"step {index} {step.action}: {exc}",
                     last_screenshot=shot,
@@ -400,39 +437,39 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             except Exception as exc:  # noqa: BLE001 - CDP/JS failures still honor the contract
                 shot = await _save_error_screenshot(browser, output_dir / "error.png")
                 return RunResult(
-                    ok=False,
+                    status="error",
                     video_path=video_path,
                     error=f"step {index} {step.action}: {type(exc).__name__}: {exc}",
                     last_screenshot=shot,
                 )
+            if stop_event.is_set():
+                break
             # Overlay pacing: a title/description change right after an action
             # applies immediately (no pause), so narration lands on the frame
             # the action produced. An adjacent title+description pair is one
             # visual change. A pause still applies between two overlay changes
             # (title -> title keeps its beat) and before a following action.
             next_step = spec.steps[index] if index < len(spec.steps) else None
-            next_is_overlay = next_step is not None and next_step.action in ("title", "description")
-            current_is_overlay = step.action in ("title", "description")
+            next_is_overlay = next_step is not None and next_step.action in OVERLAY_ACTIONS
+            current_is_overlay = step.action in OVERLAY_ACTIONS
             if next_is_overlay and (
                 not current_is_overlay
                 or (step.action == "title" and next_step.action == "description")
             ):
                 continue
-            if stop_event.is_set():
-                break
             if spec.delay_ms > 0:
                 await asyncio.sleep(spec.delay_ms / 1000.0)
 
         if stop_reason is not None:
             shot = await _save_error_screenshot(browser, output_dir / "error.png")
             return RunResult(
-                ok=False,
+                status="interrupted" if stop_interrupted else "stopped",
                 video_path=video_path,
                 stop_reason=stop_reason,
                 last_screenshot=shot,
             )
 
-        return RunResult(ok=True, video_path=video_path)
+        return RunResult(status="ok", video_path=video_path)
     finally:
         if recorder is not None:
             try:

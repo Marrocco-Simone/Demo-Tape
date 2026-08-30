@@ -1,7 +1,7 @@
 {
   "viewport": { "width": 1280, "height": 800 },
   "headless": true,
-  "output_dir": "./demo_out",
+  "output_dir": "./demo_out_test",
   "delay_ms": 500,
   "steps": [
     { "action": "navigate", "url": "http://localhost:8931/index.html" },

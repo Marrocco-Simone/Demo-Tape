@@ -67,7 +67,7 @@ def _load_and_validate(path: str) -> DemoSpec:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="demo-record",
-        description="Run a JSON action pipeline in Chromium, recording an MP4 and screenshots. No LLM.",
+        description="Run a JSON action pipeline in Chromium, recording an MP4. No LLM.",
     )
     parser.add_argument("pipeline", nargs="?", help="Path to the pipeline JSON file.")
     parser.add_argument("--schema", action="store_true", help="Print the pipeline JSON Schema and exit.")
@@ -91,19 +91,21 @@ def main(argv: list[str] | None = None) -> int:
     spec = _load_and_validate(args.pipeline)
     result = run(spec)
 
-    if result.stop_reason is not None:
+    if result.status == "ok":
+        print(f"VIDEO_OK {result.video_path}")
+        return 0
+    if result.status in ("interrupted", "stopped"):
         print(f"STOPPED {result.stop_reason}")
         if result.last_screenshot is not None:
             print(f"LAST_SCREENSHOT {result.last_screenshot}")
-        print(f"VIDEO_PARTIAL {result.video_path}")
-        return 130 if result.stop_reason.startswith("interrupted") else 1
-    if result.ok:
-        print(f"VIDEO_OK {result.video_path}")
-        return 0
+        if result.video_path.exists():
+            print(f"VIDEO_PARTIAL {result.video_path}")
+        return 130 if result.status == "interrupted" else 1
     print(f"ERROR {result.error}")
     if result.last_screenshot is not None:
         print(f"LAST_SCREENSHOT {result.last_screenshot}")
-    print(f"VIDEO_PARTIAL {result.video_path}")
+    if result.video_path.exists():
+        print(f"VIDEO_PARTIAL {result.video_path}")
     return 1
 
 

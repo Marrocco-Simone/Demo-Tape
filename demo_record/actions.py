@@ -120,9 +120,6 @@ class DoneSignal(Exception):
     """Raised by the `done` step to end the pipeline cleanly."""
 
 
-_ALIGN_TO_JUSTIFY = {"left": "flex-start", "center": "center", "right": "flex-end"}
-
-
 class ActionRunner:
     def __init__(self, browser: BrowserSession) -> None:
         self._browser = browser
@@ -266,16 +263,37 @@ class ActionRunner:
             raise ActionError(f'selector "{selector}" not found in page')
         await asyncio.sleep(SETTLE_AFTER_SCROLL_S)
 
-    async def _wait_for_load(self, timeout_s: float = 15.0) -> None:
-        """Wait until document.readyState is 'complete'."""
+    async def _wait_for_page_ready(self, timeout_s: float = 15.0) -> None:
+        """Wait for a navigation to commit and the page to settle.
+
+        Page.navigate resolves when the navigation starts, so document.readyState
+        can still describe the outgoing document. A token planted on the old
+        document disappears once the new one commits; as a fallback (bfcache
+        restores keep the old document's state) two complete polls a beat apart
+        also count as settled.
+        """
         deadline = asyncio.get_running_loop().time() + timeout_s
+        consecutive_complete = 0
         while True:
-            state = await self._eval("document.readyState")
-            if state == "complete":
+            try:
+                complete = await self._eval(
+                    "document.readyState === 'complete' && window.__demoRecordToken === undefined"
+                )
+            except ActionError:  # noqa: BLE001 - the old execution context dies mid-navigation
+                complete = False
+            consecutive_complete = consecutive_complete + 1 if complete else 0
+            if complete or consecutive_complete >= 2:
                 return
             if asyncio.get_running_loop().time() > deadline:
                 raise ActionError(f"page did not finish loading within {timeout_s:.0f}s")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.15)
+
+    async def _plant_navigation_token(self) -> None:
+        """Mark the outgoing document so _wait_for_page_ready can detect the new one."""
+        try:
+            await self._eval("window.__demoRecordToken = 1")
+        except ActionError:  # noqa: BLE001 - context can already be gone
+            pass
 
     # -- click/type feedback (ring + ripples) -----------------------------------
 
@@ -304,8 +322,9 @@ class ActionRunner:
 
     async def navigate(self, url: str, wait_seconds: float) -> None:
         client, session_id = await self._cdp()
+        await self._plant_navigation_token()
         await client.send.Page.navigate(params={"url": url}, session_id=session_id)
-        await self._wait_for_load()
+        await self._wait_for_page_ready()
         if self._overlay:
             # Navigation wiped the DOM; restore the current overlay state.
             await self._render_overlay()
@@ -322,10 +341,11 @@ class ActionRunner:
         if idx <= 0:
             raise ActionError("no previous page in history to go back to")
         entry_id = history["entries"][idx - 1]["id"]
+        await self._plant_navigation_token()
         await client.send.Page.navigateToHistoryEntry(
             params={"entryId": entry_id}, session_id=session_id
         )
-        await self._wait_for_load()
+        await self._wait_for_page_ready()
         if self._overlay:
             await self._render_overlay()
         if wait_seconds > 0:
@@ -430,19 +450,21 @@ class ActionRunner:
         await self._scroll_into_center(selector)
 
     async def assert_text(self, text: str, case_sensitive: bool = False) -> None:
-        expr = """
-(() => {
-  const want = %s;
-  const caseSensitive = %s;
+        expr = f"""
+(() => {{
+  const want = {json.dumps(text)};
+  const caseSensitive = {json.dumps(case_sensitive)};
   const url = location.href;
   const body = document.body ? document.body.innerText : '';
-  const re = /\\s+/g;
-  const norm = s => { const t = s.replace(re, ' '); return caseSensitive ? t : t.toLowerCase(); };
-  // Plain substring first (exact presence).
-  if (body.includes(want) || norm(body).includes(norm(want))) return { found: true, url, snippet: '' };
-  return { found: false, url, snippet: norm(body).slice(0, 200) };
-})()
-""" % (json.dumps(text), json.dumps(case_sensitive))
+  const norm = s => s.replace(/\\s+/g, ' ').toLowerCase();
+  // case_sensitive means exact matching - no case folding, no whitespace
+  // collapsing. The default folds both, because CSS text-transform (e.g.
+  // uppercase labels) and wrapping change what innerText returns.
+  const found = caseSensitive ? body.includes(want) : norm(body).includes(norm(want));
+  if (found) return {{ found: true, url, snippet: '' }};
+  return {{ found: false, url, snippet: norm(body).slice(0, 200) }};
+}})()
+"""
         value = await self._eval(expr)
         if not value or not value.get("found"):
             url = (value or {}).get("url", "unknown url")

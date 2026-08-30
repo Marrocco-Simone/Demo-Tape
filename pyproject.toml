@@ -1,7 +1,7 @@
 [project]
 name = "demo-record"
 version = "0.1.0"
-description = "Deterministic browser demo recorder: run a JSON action pipeline in Chromium, record an MP4 + per-step screenshots. No LLM."
+description = "Deterministic browser demo recorder: run a JSON action pipeline in Chromium, record an MP4. No LLM."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
