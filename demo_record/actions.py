@@ -100,6 +100,11 @@ _FX_SCRIPT = f"""
       }}
       return {{ ok: true }};
     }},
+    clear() {{
+      const ring = document.getElementById('demo-record-fx-ring');
+      if (ring) ring.remove();
+      return {{ ok: true }};
+    }},
   }};
   }}
   return {{ ok: true }};
@@ -351,6 +356,12 @@ class ActionRunner:
         value = await self._eval(expr)
         if not value or not value.get("ok"):
             raise ActionError(f'could not click selector "{selector}"')
+        # The click may have replaced the page under the ring; drop it now
+        # instead of letting it float over new content until its timeout.
+        try:
+            await self._eval("window.__demoFx.clear()")
+        except ActionError:  # noqa: BLE001 - a navigation already wiped the fx
+            pass
 
     async def type(self, selector: str, text: str, type_delay_ms: int, clear: bool) -> None:
         await self._scroll_into_center(selector)
