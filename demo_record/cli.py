@@ -19,7 +19,7 @@ from demo_record.runner import run
 from demo_record.spec import DemoSpec
 
 EXAMPLE = {
-    "viewport": {"width": 1920, "height": 1080},
+    "viewport": {"width": 1536, "height": 864},
     "headless": False,
     "output_dir": "./demo_out",
     "delay_ms": 500,

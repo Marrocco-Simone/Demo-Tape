@@ -1,5 +1,5 @@
 {
-  "viewport": { "width": 1920, "height": 1080 },
+  "viewport": { "width": 1536, "height": 864 },
   "headless": false,
   "output_dir": "./demo_out",
   "delay_ms": 500,

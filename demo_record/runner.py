@@ -16,7 +16,9 @@ import glob
 import logging
 import os
 import platform
+import shutil
 import signal
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -51,10 +53,15 @@ class _ScreencastRecorder:
     def __init__(self, browser: BrowserSession, output_path: Path, size: ViewportSize, framerate: int) -> None:
         self._browser = browser
         self._size = size
+        self._framerate = framerate
         self._recorder = VideoRecorderService(output_path=output_path, size=size, framerate=framerate)
         self._client: Any = None
         self._session_id: str | None = None
         self._pending: set[asyncio.Task] = set()
+        self._last_data: str | None = None
+        self._last_ts: float | None = None
+        self._first_ts: float | None = None
+        self._first_wall: float | None = None
 
     async def start(self) -> None:
         cdp_session = await self._browser.get_or_create_cdp_session()
@@ -82,7 +89,22 @@ class _ScreencastRecorder:
     def _on_frame(self, event, session_id: str | None) -> None:
         if self._session_id and session_id != self._session_id:
             return
-        self._recorder.add_frame(event["data"])
+        data = event["data"]
+        ts = (event.get("metadata") or {}).get("timestamp")
+        if ts is not None and self._first_ts is None:
+            self._first_ts = ts
+            self._first_wall = time.monotonic()
+        if ts is not None and self._last_ts is not None and self._last_data is not None:
+            # Chromium only repaints on change, so an idle second sends no
+            # frames. Hold the previous frame across the gap or the video
+            # loses every pause and plays back frantic.
+            gap = int(round((ts - self._last_ts) * self._framerate)) - 1
+            for _ in range(max(0, min(gap, self._framerate * 30))):
+                self._recorder.add_frame(self._last_data)
+        self._recorder.add_frame(data)
+        if ts is not None:
+            self._last_ts = ts
+        self._last_data = data
         # Acknowledge so Chromium keeps sending frames. Keep a strong reference
         # to the task so it isn't garbage-collected mid-flight.
         task = asyncio.ensure_future(self._ack(event))
@@ -98,6 +120,18 @@ class _ScreencastRecorder:
             pass
 
     async def stop(self) -> Path:
+        # Pad the tail: from the last received frame to now, otherwise the
+        # closing narration collapses to a single frame.
+        if (
+            self._last_data is not None
+            and self._last_ts is not None
+            and self._first_wall is not None
+            and self._first_ts is not None
+        ):
+            wall_at_last = self._first_wall + (self._last_ts - self._first_ts)
+            tail = int((time.monotonic() - wall_at_last) * self._framerate)
+            for _ in range(max(0, min(tail, self._framerate * 30))):
+                self._recorder.add_frame(self._last_data)
         if self._session_id:
             try:
                 await self._client.send.Page.stopScreencast(session_id=self._session_id)
@@ -163,6 +197,11 @@ def _find_chromium() -> Path | None:
 async def run_pipeline(spec: DemoSpec) -> RunResult:
     output_dir = Path(spec.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Older versions wrote per-step screenshots; a leftover steps/ next to a
+    # fresh video.mp4 reads as if it belonged to this run.
+    legacy_steps = output_dir / "steps"
+    if legacy_steps.exists():
+        shutil.rmtree(legacy_steps)
     video_path = output_dir / "video.mp4"
     size = ViewportSize(width=spec.viewport.width, height=spec.viewport.height)
 

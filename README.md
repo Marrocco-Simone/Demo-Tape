@@ -50,7 +50,7 @@ A pipeline is a JSON object:
 
 | field        | type    | default       | meaning |
 |--------------|---------|---------------|---------|
-| `viewport`   | object  | `{1920, 1080}` | Page viewport = video size. |
+| `viewport`   | object  | `{1536, 864}` | Page viewport = video size (16:9, fits laptops; both multiples of 16 so the MP4 has no black bars). |
 | `headless`   | bool    | `false`       | Run without a visible window (video still records). |
 | `output_dir` | string  | `./demo_out`  | Where `video.mp4` and `error.png` go. |
 | `delay_ms`   | int     | `500`         | Pause after **every** step. Use `wait` steps for longer pauses. |

@@ -15,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class Viewport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    width: int = Field(default=1920, ge=1)
-    height: int = Field(default=1080, ge=1)
+    width: int = Field(default=1536, ge=1)
+    height: int = Field(default=864, ge=1)
 
 
 class NavigateStep(BaseModel):
