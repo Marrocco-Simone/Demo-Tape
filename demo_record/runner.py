@@ -12,8 +12,10 @@ The partial video is saved on failure so the breakage point is visible.
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
 import os
+import platform
 import signal
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +121,45 @@ async def _save_error_screenshot(browser: BrowserSession, path: Path) -> Path | 
         return None
 
 
+def _find_chromium() -> Path | None:
+    """Locate a standalone Chromium, preferring it over system Chrome.
+
+    browser-use's fallback only knows the old Playwright layout (Chromium.app);
+    Playwright >=1.5x ships 'Google Chrome for Testing.app' instead, so without
+    this resolver an installed Chromium is silently skipped.
+    """
+    home = Path.home()
+    system = platform.system()
+    if system == "Darwin":
+        candidates = [
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            str(home / "Applications/Chromium.app/Contents/MacOS/Chromium"),
+            str(home / "Library/Caches/ms-playwright/chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium"),
+            str(home / "Library/Caches/ms-playwright/chromium-*/chrome-mac*/*.app/Contents/MacOS/*"),
+        ]
+    elif system == "Linux":
+        candidates = [
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/local/bin/chromium",
+            "/snap/bin/chromium",
+            str(home / ".cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
+        ]
+    else:  # Windows
+        candidates = [
+            r"C:\Program Files\Chromium\Application\chrome.exe",
+            r"C:\Program Files (x86)\Chromium\Application\chrome.exe",
+            str(home / r"AppData\Local\Chromium\Application\chrome.exe"),
+            str(home / r"AppData\Local\ms-playwright\chromium-*\chrome-win*\chrome.exe"),
+        ]
+    for pattern in candidates:
+        for match in sorted(glob.glob(os.path.expandvars(os.path.expanduser(pattern))), reverse=True):
+            exe = Path(match)
+            if exe.is_file() and os.access(exe, os.X_OK):
+                return exe
+    return None
+
+
 async def run_pipeline(spec: DemoSpec) -> RunResult:
     output_dir = Path(spec.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -130,10 +171,18 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
     # the page when watching live. Headless has no UI; sizes match exactly.
     window_height = spec.viewport.height + (120 if not spec.headless else 0)
 
+    chromium_exe = _find_chromium()
+    if chromium_exe is not None:
+        logger.info("using Chromium at %s", chromium_exe)
+
     browser = BrowserSession(
         headless=spec.headless,
         viewport={"width": spec.viewport.width, "height": spec.viewport.height},
         window_size={"width": spec.viewport.width, "height": window_height},
+        # Prefer a standalone Chromium when one is installed (playwright cache
+        # or /Applications); otherwise browser-use's fallback finds system
+        # Chrome. executable_path is strict: no silent fallback beyond this.
+        executable_path=chromium_exe,
         # Browser-use downloads its ad-block/cookie extensions at startup, which
         # noisily fails (and is useless for demos). Turn them off. These launch
         # flags exist for its agent/stealth behavior and each triggers Chrome's

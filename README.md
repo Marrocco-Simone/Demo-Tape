@@ -19,6 +19,22 @@ Requires Python ≥ 3.11 and a Chrome/Chromium binary (browser-use finds it auto
 The `browser-use[video]` dependency (video encoding via ffmpeg) is installed
 automatically by `pip install -e .` since it's declared in `pyproject.toml`.
 
+### Global CLI (run from any repo)
+
+`pip install -e .` only activates inside this project's venv. To get a global
+`demo-record` command, symlink it onto your PATH:
+
+```bash
+ln -s "$(pwd)/.venv/bin/demo-record" ~/.local/bin/demo-record
+```
+
+The symlink runs through the project venv (editable install), so code changes
+apply immediately. To update the tool later: `git pull && pip install -e .`
+
+**Browser choice:** a standalone Chromium is preferred automatically when one is
+installed (Playwright cache — `playwright install chromium` — or
+`/Applications/Chromium.app`); otherwise it falls back to system Google Chrome.
+
 ## Usage
 
 ```bash
