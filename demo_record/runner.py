@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import json
 import logging
 import os
 import platform
 import shutil
 import signal
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -194,6 +196,47 @@ def _find_chromium() -> Path | None:
     return None
 
 
+def _create_quiet_profile() -> Path:
+    """Fresh user-data-dir with every browser popup disabled.
+
+    A default profile nags through recordings: save-password bubbles, password
+    breach warnings, save-IBAN/card autofill prompts, translate bars, default
+    browser and first-run promos. Prewriting Chromium's Preferences turns them
+    all off before the first launch.
+    """
+    user_data_dir = Path(tempfile.mkdtemp(prefix="demo-record-profile-"))
+    default_dir = user_data_dir / "Default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    prefs = {
+        "credentials_enable_service": False,
+        "credentials_enable_autosignin": False,
+        "PasswordLeakDetectionEnabled": False,
+        "autofill": {
+            "credit_card_enabled": False,
+            "profile_enabled": False,
+            "iban_enabled": False,
+        },
+        "translate": {"enabled": False},
+        "translate_blocked_languages": ["en"],
+        "browser": {"has_seen_welcome_page": True, "check_default_browser": False},
+        "distribution": {
+            "make_chrome_default": False,
+            "suppress_default_browser_prompt_for_new_chrome": True,
+            "import_bookmarks": False,
+            "import_search_engine": False,
+            "skip_first_run_ui": True,
+        },
+        "sync_promo": {"show_on_first_run_allowed": False},
+        "privacy_sandbox": {
+            "m1": {"row_notice_acknowledged": True, "restricted_notice_acknowledged": True}
+        },
+        "default_apps_install_state": 3,
+    }
+    (default_dir / "Preferences").write_text(json.dumps(prefs))
+    (user_data_dir / "First Run").write_text("")
+    return user_data_dir
+
+
 async def run_pipeline(spec: DemoSpec) -> RunResult:
     output_dir = Path(spec.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -213,11 +256,13 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
     chromium_exe = _find_chromium()
     if chromium_exe is not None:
         logger.info("using Chromium at %s", chromium_exe)
+    user_data_dir = _create_quiet_profile()
 
     browser = BrowserSession(
         headless=spec.headless,
         viewport={"width": spec.viewport.width, "height": spec.viewport.height},
         window_size={"width": spec.viewport.width, "height": window_height},
+        user_data_dir=user_data_dir,
         # Prefer a standalone Chromium when one is installed (playwright cache
         # or /Applications); otherwise browser-use's fallback finds system
         # Chrome. executable_path is strict: no silent fallback beyond this.
@@ -337,6 +382,7 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             await browser.kill()
         except Exception:  # noqa: BLE001
             logger.warning("failed to close browser cleanly", exc_info=True)
+        shutil.rmtree(user_data_dir, ignore_errors=True)
 
 
 def run(spec: DemoSpec) -> RunResult:
