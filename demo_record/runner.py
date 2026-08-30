@@ -207,12 +207,18 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                     error=f"step {index} {step.action}: {type(exc).__name__}: {exc}",
                     last_screenshot=shot,
                 )
-            # Skip the pause and the review screenshot between adjacent title
-            # and description steps: they form one visual change, and pausing
-            # between them would show a mismatched pair (new title, old
-            # description) on the recording.
+            # Overlay pacing: a title/description change right after an action
+            # applies immediately (no pause), so narration lands on the frame
+            # the action produced. An adjacent title+description pair is one
+            # visual change. A pause still applies between two overlay changes
+            # (title -> title keeps its beat) and before a following action.
             next_step = spec.steps[index] if index < len(spec.steps) else None
-            if next_step is not None and {step.action, next_step.action} == {"title", "description"}:
+            next_is_overlay = next_step is not None and next_step.action in ("title", "description")
+            current_is_overlay = step.action in ("title", "description")
+            if next_is_overlay and (
+                not current_is_overlay
+                or (step.action == "title" and next_step.action == "description")
+            ):
                 continue
             if stop_event.is_set():
                 break

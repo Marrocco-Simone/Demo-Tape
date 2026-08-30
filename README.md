@@ -90,6 +90,12 @@ Notes:
     a `description` step (nothing between them), the inter-step pause is
     skipped, so the viewer never sees a mismatched pair (new title + old
     description). Emit them as a pair at every chapter change.
+  - **Change text AFTER the action it describes**: an overlay change that
+    directly follows an action (click, type, navigate, …) applies immediately,
+    with no pause — the narration lands on the frame the action produced.
+    Changing text before an action keeps the normal pause first. Two overlay
+    changes back to back (title → title) also keep the pause between them, so
+    each state stays readable.
   - **Narration survives navigation**: set it once and it re-appears on every
     page — including before the first `navigate` — and it re-applies itself if
     the app replaces its DOM mid-run (loading screens, soft navigation).
@@ -133,6 +139,8 @@ Rules:
 - Use top-level `delay_ms` (default 500) for pacing; add `wait` steps for longer transitions.
 - Narrate chapters with a `title` step immediately followed by a `description`
   step (adjacent, nothing between) — the tool then applies them as one change.
+- Emit narration AFTER the action it describes (click → title/description), not
+  before: text changes right after an action apply instantly.
 - If you target a dev server, give the first `navigate` a high `wait_seconds` (~8s) — routes compile on first request.
 - ALWAYS run `demo-record --validate demo.json` and fix any errors until it
   prints OK before telling the user it's ready.
