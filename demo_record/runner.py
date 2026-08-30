@@ -17,9 +17,11 @@ import json
 import logging
 import os
 import platform
+import queue
 import shutil
 import signal
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,11 +47,13 @@ class RunResult:
     stop_reason: str | None = None
 
 
-class _ScreencastRecorder:
-    """Drive browser-use's VideoRecorderService from a CDP screencast.
+class _TickRecorder:
+    """Sample the page at a fixed rate and feed VideoRecorderService.
 
-    Mirrors the frame-handling of browser-use's RecordingWatchdog without the
-    Agent machinery (no tab-switching needed for a single-page pipeline).
+    Page.startScreencast only fires on repaint and is ack-gated, so it records
+    the first frame of each transition and nothing of a settled page. A clock-
+    driven capture samples uniformly: animations keep their intermediate frames
+    and a still page still produces frames.
     """
 
     def __init__(self, browser: BrowserSession, output_path: Path, size: ViewportSize, framerate: int) -> None:
@@ -59,11 +63,19 @@ class _ScreencastRecorder:
         self._recorder = VideoRecorderService(output_path=output_path, size=size, framerate=framerate)
         self._client: Any = None
         self._session_id: str | None = None
-        self._pending: set[asyncio.Task] = set()
+        self._queue: queue.Queue[str | None] = queue.Queue(maxsize=framerate * 4)
+        self._worker: threading.Thread | None = None
+        self._task: asyncio.Task | None = None
+        self._running = False
         self._last_data: str | None = None
-        self._last_ts: float | None = None
-        self._first_ts: float | None = None
-        self._first_wall: float | None = None
+        self._written = 0
+        self._dropped = 0
+        self._started_at = 0.0
+        self._capture_params: dict[str, Any] = {
+            "format": "jpeg",
+            "quality": 80,
+            "optimizeForSpeed": True,
+        }
 
     async def start(self) -> None:
         cdp_session = await self._browser.get_or_create_cdp_session()
@@ -76,81 +88,100 @@ class _ScreencastRecorder:
                 'video recorder failed to start - install video deps with: pip install "browser-use[video]"'
             )
 
-        self._client.register.Page.screencastFrame(self._on_frame)
-        await self._client.send.Page.startScreencast(
-            params={
-                "format": "png",
-                "quality": 90,
-                "maxWidth": self._size["width"],
-                "maxHeight": self._size["height"],
-                "everyNthFrame": 1,
-            },
-            session_id=self._session_id,
-        )
-
-    def _on_frame(self, event, session_id: str | None) -> None:
-        if self._session_id and session_id != self._session_id:
-            return
-        data = event["data"]
-        ts = (event.get("metadata") or {}).get("timestamp")
-        if ts is not None and self._first_ts is None:
-            self._first_ts = ts
-            self._first_wall = time.monotonic()
-        if ts is not None and self._last_ts is not None and self._last_data is not None:
-            elapsed = ts - self._last_ts
-            # Screencast bursts above the target framerate during animations;
-            # extra frames stretch a fixed-fps video, so drop sub-frame gaps.
-            if elapsed < 0.85 / self._framerate:
-                self._ack_soon(event)
-                return
-            # Chromium only repaints on change, so an idle second sends no
-            # frames. Hold the previous frame across the gap or the video
-            # loses every pause and plays back frantic.
-            gap = int(round(elapsed * self._framerate)) - 1
-            for _ in range(max(0, min(gap, self._framerate * 30))):
-                self._recorder.add_frame(self._last_data)
-        self._recorder.add_frame(data)
-        if ts is not None:
-            self._last_ts = ts
-        self._last_data = data
-        self._ack_soon(event)
-
-    def _ack_soon(self, event) -> None:
-        # Acknowledge so Chromium keeps sending frames. Keep a strong reference
-        # to the task so it isn't garbage-collected mid-flight.
-        task = asyncio.ensure_future(self._ack(event))
-        self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
-
-    async def _ack(self, event) -> None:
+        # optimizeForSpeed is recent; drop it rather than fail on older Chrome.
         try:
-            await self._client.send.Page.screencastFrameAck(
-                params={"sessionId": event["sessionId"]}, session_id=self._session_id
+            self._last_data = await self._capture()
+        except Exception:  # noqa: BLE001
+            self._capture_params.pop("optimizeForSpeed", None)
+            try:
+                self._last_data = await self._capture()
+            except Exception:  # noqa: BLE001
+                self._last_data = None  # first successful tick populates it
+
+        self._worker = threading.Thread(target=self._drain, daemon=True)
+        self._worker.start()
+        self._running = True
+        self._started_at = time.monotonic()
+        self._task = asyncio.create_task(self._loop())
+
+    def _drain(self) -> None:
+        try:
+            while True:
+                item = self._queue.get()
+                if item is None:
+                    return
+                self._recorder.add_frame(item)
+        except Exception:  # noqa: BLE001
+            logger.exception("video worker thread died")
+
+    async def _capture(self) -> str:
+        # Chrome can silently drop a captureScreenshot issued around a
+        # navigation (no response ever arrives); bound the wait and skip the
+        # tick - _fill_to keeps the video real-time regardless.
+        try:
+            result = await asyncio.wait_for(
+                self._client.send.Page.captureScreenshot(
+                    params=self._capture_params, session_id=self._session_id
+                ),
+                timeout=1.0,
             )
-        except Exception:  # noqa: BLE001 - ack failures must not break recording
-            pass
+        except asyncio.TimeoutError:
+            logger.warning("captureScreenshot timed out; skipping tick")
+            raise
+        return result["data"]
+
+    async def _loop(self) -> None:
+        interval = 1.0 / self._framerate
+        while self._running:
+            started = time.monotonic()
+            try:
+                self._last_data = await self._capture()
+            except Exception:  # noqa: BLE001 - a navigation can refuse one capture
+                pass
+            self._fill_to(time.monotonic())
+            remaining = interval - (time.monotonic() - started)
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+
+    def _stats(self, label: str) -> None:
+        target = int((time.monotonic() - self._started_at) * self._framerate)
+        logger.info("%s: written=%d dropped=%d target=%d", label, self._written, self._dropped, target)
+
+    def _fill_to(self, now: float) -> None:
+        """Write frames until the file matches elapsed wall-clock.
+
+        A capture slower than the tick writes the same frame more than once, so
+        the recording stays real-time and degrades in smoothness, never in
+        length.
+        """
+        if self._last_data is None:
+            return
+        target = int((now - self._started_at) * self._framerate)
+        while self._written < target:
+            try:
+                self._queue.put_nowait(self._last_data)
+            except queue.Full:
+                self._dropped += 1
+                return
+            self._written += 1
 
     async def stop(self) -> Path:
-        # Pad the tail: from the last received frame to now, otherwise the
-        # closing narration collapses to a single frame.
-        if (
-            self._last_data is not None
-            and self._last_ts is not None
-            and self._first_wall is not None
-            and self._first_ts is not None
-        ):
-            wall_at_last = self._first_wall + (self._last_ts - self._first_ts)
-            tail = int((time.monotonic() - wall_at_last) * self._framerate)
-            for _ in range(max(0, min(tail, self._framerate * 30))):
-                self._recorder.add_frame(self._last_data)
-        if self._session_id:
-            try:
-                await self._client.send.Page.stopScreencast(session_id=self._session_id)
-            except Exception:  # noqa: BLE001
-                pass
-        if self._pending:
-            await asyncio.gather(*self._pending, return_exceptions=True)
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            if not self._task.cancelled():
+                exc = self._task.exception()
+                if exc is not None:
+                    logger.error("tick loop died: %s", exc, exc_info=exc)
+        self._stats("tick stop")
+        self._fill_to(time.monotonic())
+        self._queue.put(None)
         loop = asyncio.get_running_loop()
+        if self._worker is not None:
+            await loop.run_in_executor(None, self._worker.join)
+        if self._dropped:
+            logger.warning("video: %d frames dropped (encoder fell behind)", self._dropped)
         await loop.run_in_executor(None, self._recorder.stop_and_save)
         return self._recorder.output_path
 
@@ -254,6 +285,10 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
     legacy_steps = output_dir / "steps"
     if legacy_steps.exists():
         shutil.rmtree(legacy_steps)
+    # A stale error.png beside a fresh video.mp4 reads as if this run failed.
+    stale_error = output_dir / "error.png"
+    if stale_error.exists():
+        stale_error.unlink()
     video_path = output_dir / "video.mp4"
     size = ViewportSize(width=spec.viewport.width, height=spec.viewport.height)
 
@@ -297,7 +332,7 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
         record_video_dir=None,
     )
 
-    recorder: _ScreencastRecorder | None = None
+    recorder: _TickRecorder | None = None
     actions = ActionRunner(browser)
 
     # Stop machinery: Ctrl+C / SIGTERM, or the browser dying (user closed the
@@ -332,7 +367,7 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
 
     try:
         await browser.start()
-        recorder = _ScreencastRecorder(browser, video_path, size, framerate=30)
+        recorder = _TickRecorder(browser, video_path, size, framerate=30)
         await recorder.start()
 
         for index, step in enumerate(spec.steps, start=1):
