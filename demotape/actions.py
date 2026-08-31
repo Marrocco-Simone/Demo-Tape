@@ -263,28 +263,43 @@ class ActionRunner:
             raise ActionError(f'selector "{selector}" not found in page')
         await asyncio.sleep(SETTLE_AFTER_SCROLL_S)
 
-    async def _wait_for_page_ready(self, timeout_s: float = 15.0) -> None:
+    async def _wait_for_page_ready(
+        self, timeout_s: float = 15.0, target_url: str | None = None
+    ) -> None:
         """Wait for a navigation to commit and the page to settle.
 
-        Page.navigate resolves when the navigation starts, so document.readyState
-        can still describe the outgoing document. A token planted on the old
-        document disappears once the new one commits; as a fallback (bfcache
-        restores keep the old document's state) two complete polls a beat apart
-        also count as settled.
+        Page.navigate and history-entry navigation resolve when the navigation
+        starts, so document.readyState can still describe the outgoing document.
+        Commit is detected by two signals: a fresh document (no __demotapeToken)
+        whose readyState is complete, or - for same-document navigation, where
+        the document and the token never go away - location.href reaching the
+        target URL (SPA routers change the URL without reloading; bfcache
+        restores keep both the URL and the old document). The URL signal needs
+        two consecutive hits because the router reacts a frame after the history
+        change. A navigation that never commits times out.
         """
-        deadline = asyncio.get_running_loop().time() + timeout_s
-        consecutive_complete = 0
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        settled = 0
         while True:
             try:
-                complete = await self._eval(
-                    "document.readyState === 'complete' && window.__demotapeToken === undefined"
+                state = await self._eval(
+                    "({ href: location.href, complete: document.readyState === 'complete',"
+                    " fresh: window.__demotapeToken === undefined })"
                 )
             except ActionError:  # noqa: BLE001 - the old execution context dies mid-navigation
-                complete = False
-            consecutive_complete = consecutive_complete + 1 if complete else 0
-            if complete or consecutive_complete >= 2:
-                return
-            if asyncio.get_running_loop().time() > deadline:
+                state = None
+                settled = 0
+            if state and state.get("complete"):
+                if state.get("fresh"):
+                    return
+                if target_url is not None and state.get("href") == target_url:
+                    settled += 1
+                    if settled >= 2:
+                        return
+                else:
+                    settled = 0
+            if loop.time() > deadline:
                 raise ActionError(f"page did not finish loading within {timeout_s:.0f}s")
             await asyncio.sleep(0.15)
 
@@ -294,6 +309,12 @@ class ActionRunner:
             await self._eval("window.__demotapeToken = 1")
         except ActionError:  # noqa: BLE001 - context can already be gone
             pass
+
+    async def _current_url(self) -> str | None:
+        try:
+            return await self._eval("location.href")
+        except ActionError:  # noqa: BLE001 - context can already be gone
+            return None
 
     # -- click/type feedback (ring + ripples) -----------------------------------
 
@@ -322,9 +343,15 @@ class ActionRunner:
 
     async def navigate(self, url: str, wait_seconds: float) -> None:
         client, session_id = await self._cdp()
+        current = await self._current_url()
         await self._plant_navigation_token()
         await client.send.Page.navigate(params={"url": url}, session_id=session_id)
-        await self._wait_for_page_ready()
+        # Same-URL navigation is a reload: href matching is no commit signal
+        # there (it matches before the reload even starts), so only the token
+        # may decide. A fragment-only change never produces a new document, so
+        # the URL signal is what lets those finish.
+        target_url = url if current is not None and url != current else None
+        await self._wait_for_page_ready(target_url=target_url)
         if self._overlay:
             # Navigation wiped the DOM; restore the current overlay state.
             await self._render_overlay()
@@ -340,12 +367,21 @@ class ActionRunner:
         idx = history.get("currentIndex", 0)
         if idx <= 0:
             raise ActionError("no previous page in history to go back to")
-        entry_id = history["entries"][idx - 1]["id"]
+        entry = history["entries"][idx - 1]
+        # Read the URL before dispatching: a same-document back can land within
+        # milliseconds, and comparing against the landed URL would disable the
+        # very signal that detects it.
+        current = await self._current_url()
         await self._plant_navigation_token()
         await client.send.Page.navigateToHistoryEntry(
-            params={"entryId": entry_id}, session_id=session_id
+            params={"entryId": entry["id"]}, session_id=session_id
         )
-        await self._wait_for_page_ready()
+        # Same-document back (SPA routers, bfcache): the token survives, only
+        # the URL tells us the history navigation landed.
+        target_url = entry.get("url") if current is not None else None
+        if target_url == current:
+            target_url = None
+        await self._wait_for_page_ready(target_url=target_url)
         if self._overlay:
             await self._render_overlay()
         if wait_seconds > 0:
