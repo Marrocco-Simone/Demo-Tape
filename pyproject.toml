@@ -9,6 +9,14 @@ dependencies = [
     "pydantic>=2.0",
 ]
 
+[project.optional-dependencies]
+tts = [
+    "kokoro-onnx>=0.4",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "huggingface-hub>=0.20",
+]
+
 [project.scripts]
 demotape = "demotape.cli:main"
 

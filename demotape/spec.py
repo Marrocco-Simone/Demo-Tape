@@ -220,4 +220,18 @@ class DemoSpec(BaseModel):
         ge=0,
         description="Pause applied after EVERY step, in ms. Use explicit wait steps for longer pauses.",
     )
+    text_to_speech: bool = Field(
+        default=False,
+        description="Narrate the overlay text with a local TTS model (Kokoro, downloaded "
+        "automatically on first use). The description is spoken, or the title when there is "
+        "no description; the video holds until each clip finishes, so speech is never cut. "
+        "Requires the tts extra: pip install 'demo-tape[tts]'.",
+    )
+    tts_voice: str = Field(
+        default="af_heart",
+        description="Kokoro voice. The first letter selects the language "
+        "(a=en-us, b=en-gb, e=es, f=fr-fr, h=hi, i=it, j=ja, p=pt-br, z=zh), e.g. "
+        "af_heart, bf_emma, im_nicola (Italian), jm_kumo. Only meaningful with "
+        "text_to_speech.",
+    )
     steps: list[Step] = Field(min_length=1)

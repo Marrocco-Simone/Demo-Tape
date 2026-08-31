@@ -21,6 +21,7 @@ import queue
 import re
 import shutil
 import signal
+import subprocess
 import tempfile
 import threading
 import time
@@ -35,6 +36,7 @@ from browser_use.browser.video_recorder import VideoRecorderService
 
 from demotape.actions import ActionError, ActionRunner, DoneSignal
 from demotape.spec import DemoSpec
+from demotape.tts import NarrationClip, Narrator, mix_clips
 
 logger = logging.getLogger("demotape")
 
@@ -183,6 +185,10 @@ class _ScreencastRecorder:
                 return
             self._written += 1
 
+    def elapsed(self) -> float:
+        """Seconds since the screencast started (the video's time base)."""
+        return time.monotonic() - self._started_at
+
     async def stop(self) -> Path:
         if self._session_id:
             try:
@@ -204,6 +210,45 @@ class _ScreencastRecorder:
             logger.warning("video: %d frames dropped (encoder fell behind)", self._dropped)
         await loop.run_in_executor(None, self._recorder.stop_and_save)
         return self._recorder.output_path
+
+
+def _find_ffmpeg() -> str | None:
+    return shutil.which("ffmpeg")
+
+
+def _mux_narration(video_path: Path, clips: list[NarrationClip], ffmpeg: str) -> None:
+    """Mix narration clips into `video_path` as its audio track.
+
+    Best-effort by design: a finished silent video beats a half-muxed one, so
+    any failure here is a warning, never a run failure. ffprobe measures the
+    video so the narration timeline matches the file, not the wall clock
+    (dropped encoder frames can make those differ).
+    """
+    try:
+        ffprobe = shutil.which("ffprobe")
+        if ffprobe is None:
+            logger.warning("narration skipped: ffprobe not found (install ffmpeg)")
+            return
+        probe = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+            capture_output=True, text=True, check=True,
+        )
+        duration_s = float(probe.stdout.strip())
+        wav_path = video_path.parent / "narration.wav"
+        mix_clips(clips, duration_s, wav_path)
+        muxed = video_path.with_name(video_path.stem + ".mux.mp4")
+        subprocess.run(
+            [ffmpeg, "-y", "-i", str(video_path), "-i", str(wav_path),
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+             "-movflags", "+faststart", str(muxed)],
+            capture_output=True, check=True,
+        )
+        muxed.replace(video_path)
+        wav_path.unlink(missing_ok=True)
+        logger.info("narration muxed into %s", video_path)
+    except Exception:  # noqa: BLE001 - narration must not break the output contract
+        logger.warning("could not mux narration audio", exc_info=True)
 
 
 async def _save_error_screenshot(browser: BrowserSession, path: Path) -> Path | None:
@@ -332,6 +377,25 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
         logger.info("using Chromium at %s", chromium_exe)
     user_data_dir = _create_quiet_profile()
 
+    narrator: Narrator | None = None
+    ffmpeg_bin: str | None = None
+    if spec.text_to_speech:
+        ffmpeg_bin = _find_ffmpeg()
+        if ffmpeg_bin is None:
+            return RunResult(
+                status="error",
+                video_path=video_path,
+                error="startup: text_to_speech requires ffmpeg on PATH (it muxes the "
+                "narration audio track); install it with `brew install ffmpeg`",
+            )
+        narrator = Narrator(spec.tts_voice)
+
+    # Narration clips with their offsets on the video's time base; mixed into
+    # the file after the recorder finalizes. Defined before the try so the
+    # finally-mux can never hit an unbound name after a startup failure.
+    clips: list[NarrationClip] = []
+    last_narrated = [""]
+
     browser = BrowserSession(
         headless=spec.headless,
         viewport={"width": spec.viewport.width, "height": spec.viewport.height},
@@ -407,6 +471,11 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
 
     try:
         try:
+            # Model download (first run) and engine load happen before the
+            # browser so a broken tts setup fails with the startup contract,
+            # not mid-recording.
+            if narrator is not None:
+                await narrator.ensure_ready()
             await browser.start()
             recorder = _ScreencastRecorder(browser, video_path, size, framerate=30)
             await recorder.start()
@@ -416,6 +485,35 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                 video_path=video_path,
                 error=f"startup: {type(exc).__name__}: {exc}",
             )
+
+        # Mixed into the file after the recorder finalizes (see finally).
+
+        async def _narrate(step_index: int) -> bool:
+            """Speak the current overlay text, holding the video while it plays.
+
+            Returns True when a clip was placed (the caller then skips the
+            inter-step pause - narration IS the pacing). Synthesis or engine
+            failures degrade to a silent video: the recording is too valuable
+            to lose over one bad clip.
+            """
+            if narrator is None or recorder is None:
+                return False
+            text = actions.narration_text()
+            if not text or text == last_narrated[0]:
+                return False
+            last_narrated[0] = text
+            try:
+                clip = await narrator.synthesize(text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "step %d: narration failed (%s); continuing silent", step_index, exc
+                )
+                return False
+            clip.start_s = max(0.0, recorder.elapsed())
+            clips.append(clip)
+            logger.info("step %d: narrating %.1fs", step_index, len(clip.samples) / clip.sample_rate)
+            await asyncio.sleep(len(clip.samples) / clip.sample_rate)
+            return True
 
         for index, step in enumerate(spec.steps, start=1):
             if stop_event.is_set():
@@ -452,6 +550,12 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             next_step = spec.steps[index] if index < len(spec.steps) else None
             next_is_overlay = next_step is not None and next_step.action in OVERLAY_ACTIONS
             current_is_overlay = step.action in OVERLAY_ACTIONS
+            # Narration speaks once the overlay pair is complete (the next
+            # step is a real action or the end), replacing the inter-step
+            # pause: the video holds until the clip finishes, so the next
+            # text change can never cut the speech off.
+            if current_is_overlay and not next_is_overlay and await _narrate(index):
+                continue
             if next_is_overlay and (
                 not current_is_overlay
                 or (step.action == "title" and next_step.action == "description")
@@ -474,6 +578,10 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
         if recorder is not None:
             try:
                 await recorder.stop()
+                if clips and ffmpeg_bin is not None:
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, _mux_narration, video_path, clips, ffmpeg_bin
+                    )
             except Exception:  # noqa: BLE001
                 logger.warning("failed to finalize video", exc_info=True)
         try:

@@ -19,6 +19,13 @@ Requires Python ≥ 3.11 and a Chrome/Chromium binary (browser-use finds it auto
 The `browser-use[video]` dependency (video encoding via ffmpeg) is installed
 automatically by `pip install -e .` since it's declared in `pyproject.toml`.
 
+For text-to-speech narration, install the optional extra (Kokoro runs fully
+local on CPU):
+
+```bash
+pip install -e ".[tts]"
+```
+
 ### Global CLI (run from any repo)
 
 `pip install -e .` only activates inside this project's venv. To get a global
@@ -54,6 +61,8 @@ A pipeline is a JSON object:
 | `headless`   | bool    | `false`       | Run without a visible window (video still records). |
 | `output_dir` | string  | `./demo_out`  | Where `video.mp4` and `error.png` go. |
 | `delay_ms`   | int     | `500`         | Pause after **every** step. Use `wait` steps for longer pauses. |
+| `text_to_speech` | bool | `false`      | Narrate the overlay text with a local TTS model (see below). |
+| `tts_voice`  | string  | `af_heart`    | Kokoro voice; the first letter picks the language (e.g. `im_nicola` Italian, `bf_emma` British English). Only with `text_to_speech`. |
 | `steps`      | array   | —             | Ordered list of steps (below). |
 
 Each step is a flat object with an `action` plus its params:
@@ -100,6 +109,15 @@ Notes:
   `clear: false` to append.
 - **`select`** scrolls to a native `<select>`, picks the option (by value or
   visible label), and fires `input`/`change` events.
+- **`text_to_speech`** adds a voiceover: every overlay text change (the
+  `description`, or the `title` when there is no description) is spoken by
+  **Kokoro-82M** — a fully local, Apache-licensed model. The video **holds**
+  until each clip finishes before the next step runs, so speech is never cut
+  off by the next beat; the clips are then mixed into `video.mp4` as its audio
+  track, aligned to the exact moment the text appeared. Requires
+  `pip install 'demo-tape[tts]'` plus `ffmpeg` on PATH; the model (~330MB)
+  downloads automatically from Hugging Face on first use and is cached after
+  that. Repeated identical text is narrated once.
 - **`drag`** moves the pointer with real CDP mouse events (press → interpolated
   moves → release). Without `to_selector` it drags across `selector` itself —
   use for React Native Web sliders (`role="slider"` divs; a plain click moves

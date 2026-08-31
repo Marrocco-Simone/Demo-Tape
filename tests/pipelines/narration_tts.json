@@ -1,0 +1,16 @@
+{
+  "headless": true,
+  "text_to_speech": true,
+  "output_dir": "./demo_out_narration",
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:8931/index.html" },
+    { "action": "title", "text": "Narration check" },
+    { "action": "description", "text": "This sentence is spoken by a local Kokoro model, and the video waits for it to finish." },
+    { "action": "click", "selector": "#get-started" },
+    { "action": "description", "text": "Then we type an email address." },
+    { "action": "type", "selector": "input[name=email]", "text": "demo@acme.com", "type_delay_ms": 50 },
+    { "action": "click", "selector": "#continue" },
+    { "action": "assert_text", "text": "Welcome" },
+    { "action": "done" }
+  ]
+}

@@ -246,6 +246,18 @@ class ActionRunner:
         self._overlay["description"] = {"text": text, "position": position, "align": align}
         await self._render_overlay()
 
+    def narration_text(self) -> str:
+        """The text a narration voice speaks for the current overlay state.
+
+        The description carries the narration; the title is spoken only when
+        it is the sole text on screen, so a title+description pair reads as
+        one spoken beat with no duplicated headline.
+        """
+        description = (self._overlay.get("description") or {}).get("text", "").strip()
+        if description:
+            return description
+        return (self._overlay.get("title") or {}).get("text", "").strip()
+
     # -- shared helpers --------------------------------------------------------
 
     async def _scroll_into_center(self, selector: str) -> None:
