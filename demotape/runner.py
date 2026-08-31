@@ -81,6 +81,8 @@ class _ScreencastRecorder:
         self._written = 0
         self._dropped = 0
         self._started_at = 0.0
+        self._skipped: tuple[float, str] | None = None
+        self._skip_flush: Any = None
 
     async def start(self) -> None:
         cdp_session = await self._browser.get_or_create_cdp_session()
@@ -120,9 +122,19 @@ class _ScreencastRecorder:
         if ts is not None and self._last_ts is not None:
             elapsed = ts - self._last_ts
             # Repaints can exceed the target framerate during animations;
-            # sub-frame frames are skipped and the next kept frame covers them.
+            # sub-frame frames are coalesced into the newest one, which is
+            # flushed if nothing newer arrives (see _flush_skipped).
             if elapsed < 0.85 / self._framerate:
+                self._skipped = (ts, data)
+                if self._skip_flush is None:
+                    loop = asyncio.get_running_loop()
+                    self._skip_flush = loop.call_later(0.1, self._flush_skipped)
                 return
+            # A newer accepted frame supersedes whatever was pending.
+            self._skipped = None
+            if self._skip_flush is not None:
+                self._skip_flush.cancel()
+                self._skip_flush = None
             # Chromium only repaints on change, so an idle second sends no
             # frames. The worker repeats the previous frame across the gap so
             # pauses survive in the video.
@@ -139,6 +151,35 @@ class _ScreencastRecorder:
                 self._first_ts = ts
             self._last_ts = ts
             self._last_ts_mono = time.monotonic()
+        self._last_data = data
+
+    def _flush_skipped(self) -> None:
+        """Commit the newest sub-frame frame, or a transition loses its end.
+
+        A skipped frame used to be dropped outright - fine mid-animation,
+        where the next frame covers it, but fatal when the page goes static
+        right after (overlay text renders, narration holds): the final paint
+        was never sent and the old picture stayed on screen until the next
+        action forced a repaint.
+        """
+        self._skip_flush = None
+        pending = self._skipped
+        self._skipped = None
+        if pending is None:
+            return
+        ts, data = pending
+        gap = 0
+        if self._last_ts is not None:
+            gap = max(0, int(round((ts - self._last_ts) * self._framerate)) - 1)
+        try:
+            self._queue.put_nowait((self._last_data, gap, data))
+        except queue.Full:
+            self._dropped += 1
+            return
+        if self._first_ts is None:
+            self._first_ts = ts
+        self._last_ts = ts
+        self._last_ts_mono = time.monotonic()
         self._last_data = data
 
     def video_time_now(self) -> float:
@@ -217,6 +258,9 @@ class _ScreencastRecorder:
                 await self._client.send.Page.stopScreencast(session_id=self._session_id)
             except Exception:  # noqa: BLE001
                 pass
+        # A frame pending its flush is the newest picture of the page; commit
+        # it before padding so the tail shows the final state.
+        self._flush_skipped()
         # Let in-flight frames land before padding the tail.
         await asyncio.sleep(0.15)
         self._fill_to(time.monotonic())
@@ -508,25 +552,78 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                 error=f"startup: {type(exc).__name__}: {exc}",
             )
 
-        # Mixed into the file after the recorder finalizes (see finally).
+        # Progress lines: one parseable line per recorded event, timestamped
+        # on the video's clock so an agent can read delays and wait times
+        # straight out of them.
+        t0_wall = time.monotonic()
 
-        async def _narrate(step_index: int) -> bool:
-            """Speak the current overlay text, holding the video while it plays.
+        def emit(msg: str, ts: float | None = None) -> None:
+            if ts is None:
+                ts = (
+                    recorder.video_time_now()
+                    if recorder is not None
+                    else time.monotonic() - t0_wall
+                )
+            print(f"[T+{ts:6.1f}] {msg}", flush=True)
+
+        def _describe(step: Any) -> str:
+            kind = step.action
+            if kind == "navigate":
+                return step.url
+            if kind in ("click", "highlight", "scroll"):
+                return step.selector
+            if kind == "type":
+                return f"{step.selector} <- \"{step.text}\""
+            if kind == "drag":
+                target = step.to_selector or f"{step.axis}-axis to {step.to:.0%}"
+                return f"{step.selector} -> {target}"
+            if kind == "select":
+                return f"{step.selector} option={step.option}"
+            if kind in ("title", "description"):
+                text = step.text.replace("\n", " ")
+                return f'"{text[:60]}{"…" if len(text) > 60 else ""}"'
+            if kind == "assert_text":
+                return f'"{step.text}"'
+            if kind == "assert_value":
+                return f"{step.selector} == {step.value}"
+            if kind == "wait":
+                return f"{step.seconds:.1f}s"
+            return ""
+
+        # Narration plays asynchronously: the clip is placed when its text
+        # renders, actions keep running while the voice speaks, and the only
+        # pause happens right before the NEXT text change (or at the end of
+        # the run), so a change can never cut the speech off.
+        narration_end: list[float | None] = [None]
+
+        async def _wait_narration_done() -> None:
+            if narration_end[0] is None or recorder is None:
+                return
+            target = narration_end[0]
+            narration_end[0] = None
+            while True:
+                now = recorder.video_time_now()
+                if now >= target:
+                    break
+                await asyncio.sleep(min(0.1, target - now))
+            emit("narration finished")
+
+        async def _narrate(step_index: int) -> None:
+            """Place a narration clip for the current overlay text.
 
             The clip is anchored to the moment the text rendered (before
             synthesis), on the recorder's video clock - so the voice starts
-            exactly when the text appears no matter how long synthesis takes,
-            and the hold is whatever remains of the clip after that. Returns
-            True when a clip was placed (the caller then skips the inter-step
-            pause - narration IS the pacing). Synthesis or engine failures
-            degrade to a silent video: the recording is too valuable to lose
-            over one bad clip.
+            exactly when the text appears no matter how long synthesis takes.
+            Nothing is awaited here beyond synthesis: the run continues and
+            _wait_narration_done() paces the next text change. Synthesis or
+            engine failures degrade to a silent video: the recording is too
+            valuable to lose over one bad clip.
             """
             if narrator is None or recorder is None:
-                return False
+                return
             text = actions.narration_text()
             if not text or text == last_narrated[0]:
-                return False
+                return
             last_narrated[0] = text
             t_text = recorder.video_time_now()
             try:
@@ -535,19 +632,28 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                 logger.warning(
                     "step %d: narration failed (%s); continuing silent", step_index, exc
                 )
-                return False
+                return
             duration_s = len(clip.samples) / clip.sample_rate
             clip.start_s = t_text
             clips.append(clip)
-            logger.info("step %d: narrating %.1fs", step_index, duration_s)
-            hold = duration_s - (recorder.video_time_now() - t_text)
-            await asyncio.sleep(max(0.0, hold))
-            return True
+            narration_end[0] = t_text + duration_s
+            snippet = text.replace("\n", " ")
+            emit(
+                f"narration started ({duration_s:.1f}s): \"{snippet[:60]}"
+                f"{'…' if len(snippet) > 60 else ''}\"",
+                ts=t_text,
+            )
 
         for index, step in enumerate(spec.steps, start=1):
             if stop_event.is_set():
                 logger.info("stopped before step %d", index)
                 break
+            # A text change waits for the running narration to finish, so the
+            # voice is never cut; plain actions between two text changes run
+            # while the voice is still speaking.
+            if step.action in OVERLAY_ACTIONS:
+                await _wait_narration_done()
+            detail = _describe(step)
             try:
                 await actions.run(step)
             except DoneSignal:
@@ -569,29 +675,28 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                     error=f"step {index} {step.action}: {type(exc).__name__}: {exc}",
                     last_screenshot=shot,
                 )
+            emit(f"step {index} {step.action}" + (f": {detail}" if detail else ""))
             if stop_event.is_set():
                 break
-            # Overlay pacing: a title/description change right after an action
-            # applies immediately (no pause), so narration lands on the frame
-            # the action produced. An adjacent title+description pair is one
-            # visual change. A pause still applies between two overlay changes
-            # (title -> title keeps its beat) and before a following action.
+            # Authoring is text-first: a text change renders, then the action
+            # it describes starts immediately (narration is placed when the
+            # overlay pair is complete). delay_ms only paces two consecutive
+            # actions, never an action after its text.
             next_step = spec.steps[index] if index < len(spec.steps) else None
             next_is_overlay = next_step is not None and next_step.action in OVERLAY_ACTIONS
-            current_is_overlay = step.action in OVERLAY_ACTIONS
-            # Narration speaks once the overlay pair is complete (the next
-            # step is a real action or the end), replacing the inter-step
-            # pause: the video holds until the clip finishes, so the next
-            # text change can never cut the speech off.
-            if current_is_overlay and not next_is_overlay and await _narrate(index):
+            if step.action in OVERLAY_ACTIONS:
+                if not next_is_overlay:
+                    await _narrate(index)
                 continue
-            if next_is_overlay and (
-                not current_is_overlay
-                or (step.action == "title" and next_step.action == "description")
-            ):
+            if next_is_overlay:
                 continue
             if spec.delay_ms > 0:
                 await asyncio.sleep(spec.delay_ms / 1000.0)
+
+        # The last clip must finish inside the video: hold before the
+        # recorder finalizes the file.
+        if stop_reason is None:
+            await _wait_narration_done()
 
         if stop_reason is not None:
             shot = await _save_error_screenshot(browser, output_dir / "error.png")

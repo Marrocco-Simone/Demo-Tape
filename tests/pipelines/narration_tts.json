@@ -1,7 +1,7 @@
 {
   "headless": true,
   "text_to_speech": true,
-  "tts_voice": "im_nicola",
+  "tts_voice": "if_sara",
   "output_dir": "./demo_out_narration",
   "steps": [
     { "action": "navigate", "url": "http://localhost:8931/index.html", "wait_seconds": 1.5 },

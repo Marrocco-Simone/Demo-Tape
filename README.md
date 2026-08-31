@@ -60,7 +60,7 @@ A pipeline is a JSON object:
 | `viewport`   | object  | `{1536, 864}` | Page viewport = video size (16:9, fits laptops; both multiples of 16 so the MP4 has no black bars). |
 | `headless`   | bool    | `false`       | Run without a visible window (video still records). |
 | `output_dir` | string  | `./demo_out`  | Where `video.mp4` and `error.png` go. |
-| `delay_ms`   | int     | `500`         | Pause after **every** step. Use `wait` steps for longer pauses. |
+| `delay_ms`   | int     | `500`         | Pause between two consecutive actions. A text change and the action it describes run back-to-back — author **text-first** (title/description, then the action), and the action starts immediately. |
 | `text_to_speech` | bool | `false`      | Narrate the overlay text with a local TTS model (see below). |
 | `tts_voice`  | string  | `af_heart`    | Kokoro voice; the first letter picks the language (e.g. `im_nicola` Italian, `bf_emma` British English). Only with `text_to_speech`. |
 | `steps`      | array   | —             | Ordered list of steps (below). |
@@ -87,6 +87,18 @@ Each step is a flat object with an `action` plus its params:
 
 Notes:
 
+- **Progress lines**: every recorded event prints one parseable line to stdout,
+  timestamped on the video's clock, so an agent (or human) can follow what the
+  recording shows — text changes, narration start/finish, clicks, errors:
+
+  ```
+  [T+   1.4] step 2 title: "Benvenuti in demotape"
+  [T+   1.4] narration started (11.0s): "Questo video ha un narratore locale…"
+  [T+  12.5] narration finished
+  [T+  12.9] step 4 click: #get-started
+  VIDEO_OK ./demo_out/video.mp4
+  ```
+
 - **Elements are targeted by CSS selector** (not element index). Your agent reads
   the selectors from the code it wrote.
 - **Click/typing feedback is automatic**: every `click` first draws a breathing
@@ -111,10 +123,11 @@ Notes:
   visible label), and fires `input`/`change` events.
 - **`text_to_speech`** adds a voiceover: every overlay text change (the
   `description`, or the `title` when there is no description) is spoken by
-  **Kokoro-82M** — a fully local, Apache-licensed model. The video **holds**
-  until each clip finishes before the next step runs, so speech is never cut
-  off by the next beat; the clips are then mixed into `video.mp4` as its audio
-  track, aligned to the exact moment the text appeared. Requires
+  **Kokoro-82M** — a fully local, Apache-licensed model. The voice starts when
+  the text appears, **actions keep running while it speaks**, and the video
+  only pauses right before the *next* text change (or at the end), so speech
+  is never cut off. Clips are mixed into `video.mp4` as its audio track,
+  aligned to the exact moment the text appeared. Requires
   `pip install 'demo-tape[tts]'` plus `ffmpeg` on PATH; the model (~330MB)
   downloads automatically from Hugging Face on first use and is cached after
   that. Repeated identical text is narrated once.
