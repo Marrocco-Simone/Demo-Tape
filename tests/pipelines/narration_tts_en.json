@@ -1,0 +1,20 @@
+{
+  "headless": true,
+  "text_to_speech": true,
+  "tts_voice": "af_heart",
+  "output_dir": "./demo_out_narration_en",
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:8931/index.html", "wait_seconds": 1.5 },
+    { "action": "title", "text": "Welcome to demotape" },
+    { "action": "description", "text": "This video has a local narrator: the Kokoro model runs entirely on this computer, with no external services, and the voice you are hearing was generated in English." },
+    { "action": "highlight", "selector": "#form", "duration_seconds": 2.0, "spotlight": true },
+    { "action": "click", "selector": "#get-started" },
+    { "action": "description", "text": "Now we fill in the sign-up form. Actions keep going while I speak: only the next sentence waits for this one to finish, so the narration is never interrupted." },
+    { "action": "type", "selector": "input[name=email]", "text": "demo@acme.com", "type_delay_ms": 55 },
+    { "action": "description", "text": "Email typed. Notice that the pointer really presses the buttons: every click draws a ring and concentric waves, like stones on still water." },
+    { "action": "click", "selector": "#continue" },
+    { "action": "description", "text": "Perfect: registration complete. The text read aloud always matches the exact moment it appears on screen." },
+    { "action": "assert_text", "text": "Welcome" },
+    { "action": "done" }
+  ]
+}
