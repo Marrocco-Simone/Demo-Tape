@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>demo-record test app</title>
+  <title>demotape test app</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; }
     .hero { height: 120vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(#6d28d9, #2563eb); color: #fff; }
@@ -18,6 +18,7 @@
     <p>Scroll target below the fold.</p>
     <button id="get-started">Get started</button>
     <button id="mousedown-only">Mousedown only</button>
+    <button id="pointer-only">Pointer only</button>
     <a id="anchor-nav" href="#form-section">Anchor link</a>
     <p id="md-status">row untouched</p>
   </section>
@@ -47,6 +48,10 @@
   // pattern el.click() could never trigger.
   document.getElementById('mousedown-only').addEventListener('mousedown', () => {
     document.getElementById('md-status').textContent = 'row activated';
+  });
+  // Radix/dnd-kit/Pressable pattern: pointer events only.
+  document.getElementById('pointer-only').addEventListener('pointerdown', () => {
+    document.getElementById('md-status').textContent = 'pointer row activated';
   });
   // A hashchange proves the anchor's navigation actually ran (activation
   // behavior), not just that a click listener fired.

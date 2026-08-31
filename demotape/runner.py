@@ -35,7 +35,7 @@ from browser_use.browser.session import BrowserSession
 from browser_use.browser.video_recorder import VideoRecorderService
 
 from demotape.actions import ActionError, ActionRunner, DoneSignal
-from demotape.spec import DemoSpec
+from demotape.spec import DemoSpec, describe_step
 from demotape.tts import NarrationClip, Narrator, mix_clips
 
 logger = logging.getLogger("demotape")
@@ -81,6 +81,7 @@ class _ScreencastRecorder:
         self._written = 0
         self._dropped = 0
         self._started_at = 0.0
+        self._first_frame_mono: float | None = None
         self._skipped: tuple[float, str] | None = None
         self._skip_flush: Any = None
 
@@ -149,6 +150,7 @@ class _ScreencastRecorder:
         if ts is not None:
             if self._first_ts is None:
                 self._first_ts = ts
+                self._first_frame_mono = time.monotonic()
             self._last_ts = ts
             self._last_ts_mono = time.monotonic()
         self._last_data = data
@@ -178,8 +180,16 @@ class _ScreencastRecorder:
             return
         if self._first_ts is None:
             self._first_ts = ts
+        if self._last_ts is not None and self._last_ts_mono is not None:
+            # Keep the narration clock continuous: video_time_now()
+            # extrapolates from (_last_ts, _last_ts_mono), so when _last_ts
+            # advances by a sub-frame amount the mono anchor must advance by
+            # the same amount - resetting it to "now" would step the clock
+            # backward by nearly the whole flush delay.
+            self._last_ts_mono += ts - self._last_ts
+        else:
+            self._last_ts_mono = time.monotonic()
         self._last_ts = ts
-        self._last_ts_mono = time.monotonic()
         self._last_data = data
 
     def video_time_now(self) -> float:
@@ -235,11 +245,17 @@ class _ScreencastRecorder:
         between the last frame and the end of the run must be filled with the
         final frame or the closing narration collapses. Under encoder
         back-pressure fills are dropped (counted in _dropped), which can leave
-        the file slightly shorter than wall-clock.
+        the file slightly shorter than wall-clock. The target counts from the
+        first painted frame - the file's own second zero - not from the
+        screencast start, or the tail would carry the first paint's lag as
+        frozen footage.
         """
         if self._last_data is None:
             return
-        target = int((now - self._started_at) * self._framerate)
+        origin = (
+            self._first_frame_mono if self._first_frame_mono is not None else self._started_at
+        )
+        target = int((now - origin) * self._framerate)
         while self._written < target:
             try:
                 self._queue.put_nowait((self._last_data, 0, self._last_data))
@@ -247,10 +263,6 @@ class _ScreencastRecorder:
                 self._dropped += 1
                 return
             self._written += 1
-
-    def elapsed(self) -> float:
-        """Seconds since the screencast started (the video's time base)."""
-        return time.monotonic() - self._started_at
 
     async def stop(self) -> Path:
         if self._session_id:
@@ -276,10 +288,6 @@ class _ScreencastRecorder:
             logger.warning("video: %d frames dropped (encoder fell behind)", self._dropped)
         await loop.run_in_executor(None, self._recorder.stop_and_save)
         return self._recorder.output_path
-
-
-def _find_ffmpeg() -> str | None:
-    return shutil.which("ffmpeg")
 
 
 def _mux_narration(video_path: Path, clips: list[NarrationClip], ffmpeg: str) -> None:
@@ -441,20 +449,29 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
     chromium_exe = _find_chromium()
     if chromium_exe is not None:
         logger.info("using Chromium at %s", chromium_exe)
-    user_data_dir = _create_quiet_profile()
 
+    # tts preflight BEFORE the temp profile is created: an early return here
+    # runs before the finally-cleanup, and a leaked profile directory is
+    # exactly what that order used to produce.
     narrator: Narrator | None = None
     ffmpeg_bin: str | None = None
     if spec.text_to_speech:
-        ffmpeg_bin = _find_ffmpeg()
-        if ffmpeg_bin is None:
+        missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
+        if missing:
             return RunResult(
                 status="error",
                 video_path=video_path,
-                error="startup: text_to_speech requires ffmpeg on PATH (it muxes the "
-                "narration audio track); install it with `brew install ffmpeg`",
+                error=f"startup: text_to_speech requires {missing[0]} on PATH (it muxes "
+                "the narration audio track); install it with `brew install ffmpeg`",
             )
+        ffmpeg_bin = shutil.which("ffmpeg")
         narrator = Narrator(spec.tts_voice)
+        # Model download (first run), engine load, and a throwaway warm-up
+        # synthesis all happen here - before the browser exists - so a broken
+        # tts setup fails with the startup contract, not mid-recording.
+        await narrator.ensure_ready()
+
+    user_data_dir = _create_quiet_profile()
 
     # Narration clips with their offsets on the video's time base; mixed into
     # the file after the recorder finalizes. Defined before the try so the
@@ -537,11 +554,6 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
 
     try:
         try:
-            # Model download (first run) and engine load happen before the
-            # browser so a broken tts setup fails with the startup contract,
-            # not mid-recording.
-            if narrator is not None:
-                await narrator.ensure_ready()
             await browser.start()
             recorder = _ScreencastRecorder(browser, video_path, size, framerate=30)
             await recorder.start()
@@ -565,30 +577,6 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                     else time.monotonic() - t0_wall
                 )
             print(f"[T+{ts:6.1f}] {msg}", flush=True)
-
-        def _describe(step: Any) -> str:
-            kind = step.action
-            if kind == "navigate":
-                return step.url
-            if kind in ("click", "highlight", "scroll"):
-                return step.selector
-            if kind == "type":
-                return f"{step.selector} <- \"{step.text}\""
-            if kind == "drag":
-                target = step.to_selector or f"{step.axis}-axis to {step.to:.0%}"
-                return f"{step.selector} -> {target}"
-            if kind == "select":
-                return f"{step.selector} option={step.option}"
-            if kind in ("title", "description"):
-                text = step.text.replace("\n", " ")
-                return f'"{text[:60]}{"…" if len(text) > 60 else ""}"'
-            if kind == "assert_text":
-                return f'"{step.text}"'
-            if kind == "assert_value":
-                return f"{step.selector} == {step.value}"
-            if kind == "wait":
-                return f"{step.seconds:.1f}s"
-            return ""
 
         # Narration plays asynchronously: the clip is placed when its text
         # renders, actions keep running while the voice speaks, and the only
@@ -653,7 +641,7 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             # while the voice is still speaking.
             if step.action in OVERLAY_ACTIONS:
                 await _wait_narration_done()
-            detail = _describe(step)
+            detail = describe_step(step)
             try:
                 await actions.run(step)
             except DoneSignal:

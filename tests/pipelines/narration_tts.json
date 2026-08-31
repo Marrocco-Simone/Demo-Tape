@@ -9,7 +9,7 @@
     { "action": "description", "text": "Questo video ha un narratore locale: il modello Kokoro gira interamente sul computer, senza servizi esterni, e la voce che state sentendo è stata generata in italiano." },
     { "action": "highlight", "selector": "#form", "duration_seconds": 2.0, "spotlight": true },
     { "action": "click", "selector": "#get-started" },
-    { "action": "description", "text": "Ora compiliamo il modulo di iscrizione. Il video si ferma ad aspettare la voce: quando la frase finisce, l'azione successiva parte subito, così la narazione non viene mai interrotta." },
+    { "action": "description", "text": "Ora compiliamo il modulo di iscrizione. Le azioni continuano mentre parlo: solo la prossima frase aspetta che questa sia finita, così la narrazione non viene mai interrotta." },
     { "action": "type", "selector": "input[name=email]", "text": "demo@acme.com", "type_delay_ms": 55 },
     { "action": "description", "text": "Email inserita. Notate che il puntatore preme davvero i pulsanti: ogni click disegna un anello e onde concentriche, come sassi nell'acqua." },
     { "action": "click", "selector": "#continue" },

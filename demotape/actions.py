@@ -276,7 +276,10 @@ class ActionRunner:
         await asyncio.sleep(SETTLE_AFTER_SCROLL_S)
 
     async def _wait_for_page_ready(
-        self, timeout_s: float = 15.0, target_url: str | None = None
+        self,
+        timeout_s: float = 15.0,
+        min_index: int | None = None,
+        max_index: int | None = None,
     ) -> None:
         """Wait for a navigation to commit and the page to settle.
 
@@ -284,11 +287,13 @@ class ActionRunner:
         starts, so document.readyState can still describe the outgoing document.
         Commit is detected by two signals: a fresh document (no __demotapeToken)
         whose readyState is complete, or - for same-document navigation, where
-        the document and the token never go away - location.href reaching the
-        target URL (SPA routers change the URL without reloading; bfcache
-        restores keep both the URL and the old document). The URL signal needs
-        two consecutive hits because the router reacts a frame after the history
-        change. A navigation that never commits times out.
+        the document and the token never go away - the session's history index
+        passing `min_index` (navigations move it forward) or `max_index`
+        (history.back moves it backward). SPA routers and bfcache restores
+        change history without reloading, and unlike a URL comparison an index
+        also works when two consecutive entries share the same URL. After the
+        index matches, two consecutive complete polls give the router a beat
+        to react. A navigation that never commits times out.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_s
@@ -305,11 +310,24 @@ class ActionRunner:
             if state and state.get("complete"):
                 if state.get("fresh"):
                     return
-                if target_url is not None and state.get("href") == target_url:
-                    settled += 1
-                    if settled >= 2:
-                        return
-                else:
+                if min_index is not None or max_index is not None:
+                    try:
+                        client, session_id = await self._cdp()
+                        history = await client.send.Page.getNavigationHistory(
+                            session_id=session_id
+                        )
+                        idx = history.get("currentIndex", -1)
+                        reached = (min_index is not None and idx >= min_index) or (
+                            max_index is not None and idx <= max_index
+                        )
+                        if reached:
+                            settled += 1
+                            if settled >= 2:
+                                return
+                            await asyncio.sleep(0.1)
+                            continue
+                    except ActionError:  # noqa: BLE001
+                        pass
                     settled = 0
             if loop.time() > deadline:
                 raise ActionError(f"page did not finish loading within {timeout_s:.0f}s")
@@ -321,12 +339,6 @@ class ActionRunner:
             await self._eval("window.__demotapeToken = 1")
         except ActionError:  # noqa: BLE001 - context can already be gone
             pass
-
-    async def _current_url(self) -> str | None:
-        try:
-            return await self._eval("location.href")
-        except ActionError:  # noqa: BLE001 - context can already be gone
-            return None
 
     # -- click/type feedback (ring + ripples) -----------------------------------
 
@@ -355,15 +367,16 @@ class ActionRunner:
 
     async def navigate(self, url: str, wait_seconds: float) -> None:
         client, session_id = await self._cdp()
-        current = await self._current_url()
+        history = await client.send.Page.getNavigationHistory(session_id=session_id)
+        current_index = history.get("currentIndex", 0)
         await self._plant_navigation_token()
         await client.send.Page.navigate(params={"url": url}, session_id=session_id)
-        # Same-URL navigation is a reload: href matching is no commit signal
-        # there (it matches before the reload even starts), so only the token
-        # may decide. A fragment-only change never produces a new document, so
-        # the URL signal is what lets those finish.
-        target_url = url if current is not None and url != current else None
-        await self._wait_for_page_ready(target_url=target_url)
+        # The history index is the commit signal that works for every
+        # navigation shape: cross-document, same-document (SPA routers) and
+        # same-URL reloads alike - href matching cannot decide a reload, and
+        # a fragment-only change never produces a new document. Redirect
+        # chains can land past the expected entry, hence "at least".
+        await self._wait_for_page_ready(min_index=current_index + 1)
         if self._overlay:
             # Navigation wiped the DOM; restore the current overlay state.
             await self._render_overlay()
@@ -380,20 +393,16 @@ class ActionRunner:
         if idx <= 0:
             raise ActionError("no previous page in history to go back to")
         entry = history["entries"][idx - 1]
-        # Read the URL before dispatching: a same-document back can land within
-        # milliseconds, and comparing against the landed URL would disable the
-        # very signal that detects it.
-        current = await self._current_url()
         await self._plant_navigation_token()
         await client.send.Page.navigateToHistoryEntry(
             params={"entryId": entry["id"]}, session_id=session_id
         )
-        # Same-document back (SPA routers, bfcache): the token survives, only
-        # the URL tells us the history navigation landed.
-        target_url = entry.get("url") if current is not None else None
-        if target_url == current:
-            target_url = None
-        await self._wait_for_page_ready(target_url=target_url)
+        # Same-document back (SPA routers, bfcache) keeps the document alive,
+        # so the token never clears; the history index is the landing signal,
+        # and unlike the entry's URL it also works when two consecutive
+        # history entries share the same URL (a second back in a hash router,
+        # pushState to the same path, ...).
+        await self._wait_for_page_ready(max_index=idx - 1)
         if self._overlay:
             await self._render_overlay()
         if wait_seconds > 0:
@@ -478,10 +487,13 @@ class ActionRunner:
 
         `el.click()` fires the click event alone, so a control that listens for
         mousedown - a menu row that has to act before the input it belongs to
-        loses focus - never runs. The events are dispatched from the page
-        instead of through CDP input: CDP mouse events do not reach the page
-        while the recorder drives it, and a bubbling MouseEvent is what the
-        framework listens for either way.
+        loses focus - never runs. Pointer events are dispatched too, because
+        Radix, dnd-kit and React Native Web Pressable bind onPointerDown etc.;
+        the real browser order is pointerdown -> mousedown -> pointerup ->
+        mouseup -> click. The events are dispatched from the page instead of
+        through CDP input: CDP mouse events do not reach the page while the
+        recorder drives it, and a bubbling event is what the framework
+        listens for either way.
 
         Returns False when the element is gone, so the caller can report it.
         """
@@ -496,7 +508,15 @@ class ActionRunner:
   if (!el) return {{ ok: false }};
   const at = {{ bubbles: true, cancelable: true, view: window,
     clientX: {x}, clientY: {y}, button: 0, buttons: 1 }};
+  if (typeof PointerEvent === 'function') {{
+    el.dispatchEvent(new PointerEvent('pointerdown',
+      {{ ...at, pointerId: 1, pointerType: 'mouse', isPrimary: true }}));
+  }}
   el.dispatchEvent(new MouseEvent('mousedown', at));
+  if (typeof PointerEvent === 'function') {{
+    el.dispatchEvent(new PointerEvent('pointerup',
+      {{ ...at, buttons: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true }}));
+  }}
   el.dispatchEvent(new MouseEvent('mouseup', {{ ...at, buttons: 0 }}));
   el.dispatchEvent(new MouseEvent('click', {{ ...at, buttons: 0 }}));
   return {{ ok: true }};
@@ -558,21 +578,13 @@ class ActionRunner:
         if from_ is None:
             from_ = 0.5 if to_selector and to_selector != selector else 0.0
         await self._scroll_into_center(selector)
-        # Ring press (and drop) targets for as long as the drag takes, so the
-        # recording shows which elements are involved.
-        ring_ms = max(int(duration_seconds * 1000), 300)
-        await self._fx_ring(selector, ring_ms)
-        release_on_self = not to_selector or to_selector == selector
-        if not release_on_self:
-            await self._fx_ring(to_selector, ring_ms)
 
         press_box = await self._measure_box(selector)
         if not press_box or press_box["w"] <= 0 or press_box["h"] <= 0:
             raise ActionError(f'selector "{selector}" not found (or has no size) for drag')
 
-        if release_on_self:
-            release_box = press_box
-        else:
+        release_on_self = not to_selector or to_selector == selector
+        if not release_on_self:
             to_sel: str = to_selector
             release_box = await self._measure_box(to_sel)
             if not release_box or release_box["w"] <= 0 or release_box["h"] <= 0:
@@ -606,6 +618,16 @@ class ActionRunner:
                     f'cannot drag between "{selector}" and "{to_sel}": '
                     "they do not fit in the viewport at the same time"
                 )
+        else:
+            release_box = press_box
+
+        # Rings go on after the geometry is final: a drop target scrolled in
+        # from off-screen would otherwise carry a ring parked at its old,
+        # possibly off-screen position.
+        ring_ms = max(int(duration_seconds * 1000), 300)
+        await self._fx_ring(selector, ring_ms)
+        if not release_on_self:
+            await self._fx_ring(to_selector, ring_ms)
 
         x0, y0 = await self._drag_point(press_box, from_, axis)
         x1, y1 = await self._drag_point(release_box, to, axis)

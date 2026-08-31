@@ -224,8 +224,9 @@ class DemoSpec(BaseModel):
         default=False,
         description="Narrate the overlay text with a local TTS model (Kokoro, downloaded "
         "automatically on first use). The description is spoken, or the title when there is "
-        "no description; the video holds until each clip finishes, so speech is never cut. "
-        "Requires the tts extra: pip install 'demo-tape[tts]'.",
+        "no description; the voice starts when the text appears, actions keep running while "
+        "it plays, and the next text change waits for the voice to finish. Requires the tts "
+        "extra: pip install 'demo-tape[tts]'.",
     )
     tts_voice: str = Field(
         default="af_heart",
@@ -235,3 +236,37 @@ class DemoSpec(BaseModel):
         "text_to_speech.",
     )
     steps: list[Step] = Field(min_length=1)
+
+
+def _shorten(text: str, limit: int = 60) -> str:
+    text = text.replace("\n", " ")
+    return f'"{text[:limit]}{"…" if len(text) > limit else ""}"'
+
+
+def describe_step(step: Step) -> str:
+    """One-line detail of what a step targets, for the runner's progress lines.
+
+    Lives here so the per-action fields are described next to their models
+    instead of being mirrored in the runner.
+    """
+    kind = step.action  # type: ignore[union-attr]
+    if kind == "navigate":
+        return step.url  # type: ignore[union-attr]
+    if kind in ("click", "highlight", "scroll"):
+        return step.selector  # type: ignore[union-attr]
+    if kind == "type":
+        return f'{step.selector} <- "{step.text}"'  # type: ignore[union-attr]
+    if kind == "drag":
+        target = step.to_selector or f"{step.axis}-axis to {step.to:.0%}"  # type: ignore[union-attr]
+        return f"{step.selector} -> {target}"  # type: ignore[union-attr]
+    if kind == "select":
+        return f"{step.selector} option={step.option}"  # type: ignore[union-attr]
+    if kind == "title" or kind == "description":
+        return _shorten(step.text)  # type: ignore[union-attr]
+    if kind == "assert_text":
+        return _shorten(step.text)  # type: ignore[union-attr]
+    if kind == "assert_value":
+        return f"{step.selector} == {step.value}"  # type: ignore[union-attr]
+    if kind == "wait":
+        return f"{step.seconds:.1f}s"  # type: ignore[union-attr]
+    return ""

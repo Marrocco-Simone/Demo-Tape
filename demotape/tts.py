@@ -2,12 +2,14 @@
 
 The engine is an optional dependency (`pip install 'demo-tape[tts]'`); every
 heavy import lives inside the functions that need it so the rest of demotape
-never pays for it. The model files (~330MB total) download automatically from
+never pays for it (and installing demo-tape without the tts extra still
+imports this module). The model files (~330MB) download automatically from
 Hugging Face on first use and are cached by huggingface_hub.
 
-Narration paces the recording: the runner synthesizes each clip at the step
-that changed the overlay text and holds until the clip finishes, so speech is
-never cut by the next beat. Clips are mixed into the video's audio track
+Narration paces the recording lightly: a clip starts when its overlay text
+appears, actions keep running while it plays, and the runner only waits for
+the clip to finish right before the NEXT text change (and at the end of the
+run), so speech is never cut. Clips are mixed into the video's audio track
 afterwards, at their recorded offsets.
 """
 
@@ -56,10 +58,16 @@ class Narrator:
     async def ensure_ready(self) -> None:
         """Load the engine (downloading the model on first use) and warm it up.
 
-        The first real synthesis pays ONNX session initialization and kernel
+        Also imports the audio dependencies, so a missing piece of the tts
+        extra surfaces here - as a startup error - instead of after the
+        recording, when the mix would silently produce a silent video. The
+        first real synthesis pays ONNX session initialization and kernel
         warm-up; doing it here keeps that CPU spike out of the recording,
         where it would stall frames between a text change and its narration.
         """
+        import numpy  # noqa: F401 - preflight: fail before the browser starts
+        import soundfile  # noqa: F401 - preflight: fail before the browser starts
+
         await asyncio.to_thread(self._load)
         await self.synthesize("Hello.")
 

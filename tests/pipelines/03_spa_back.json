@@ -12,6 +12,14 @@
     { "action": "assert_text", "text": "two view" },
     { "action": "back", "wait_seconds": 0.5 },
     { "action": "assert_text", "text": "home view" },
+    { "action": "click", "selector": "#nav-one" },
+    { "action": "assert_text", "text": "one view" },
+    { "action": "click", "selector": "#push-twice" },
+    { "action": "assert_text", "text": "pushed twice" },
+    { "action": "back", "wait_seconds": 0.5 },
+    { "action": "assert_text", "text": "pushed once" },
+    { "action": "back", "wait_seconds": 0.5 },
+    { "action": "assert_text", "text": "one view" },
     { "action": "done" }
   ]
 }

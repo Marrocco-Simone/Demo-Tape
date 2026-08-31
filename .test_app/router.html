@@ -7,6 +7,7 @@
     <a href="#/home" id="nav-home">Home</a>
     <a href="#/one" id="nav-one">One</a>
     <a href="#/two" id="nav-two">Two</a>
+    <button id="push-twice">Push twice</button>
   </nav>
   <div id="view">home view</div>
   <script>
@@ -15,6 +16,21 @@
       document.getElementById('view').textContent = names[location.hash] || 'home view';
     };
     window.addEventListener('hashchange', render);
+    // Two consecutive history entries that share the SAME URL: a back to the
+    // first one changes neither href nor document, which is exactly the case
+    // a URL-based landing signal cannot detect.
+    document.getElementById('push-twice').addEventListener('click', () => {
+      history.pushState({ n: 1 }, '', location.href);
+      history.pushState({ n: 2 }, '', location.href);
+      document.getElementById('view').textContent = 'pushed twice';
+    });
+    window.addEventListener('popstate', () => {
+      if (history.state && history.state.n === 1) {
+        document.getElementById('view').textContent = 'pushed once';
+      } else {
+        render();
+      }
+    });
     render();
   </script>
 </body>
