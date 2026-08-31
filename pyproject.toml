@@ -1,5 +1,5 @@
 [project]
-name = "demo-record"
+name = "demo-tape"
 version = "0.1.0"
 description = "Deterministic browser demo recorder: run a JSON action pipeline in Chromium, record an MP4. No LLM."
 readme = "README.md"
@@ -10,11 +10,11 @@ dependencies = [
 ]
 
 [project.scripts]
-demo-record = "demo_record.cli:main"
+demotape = "demotape.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["demo_record*"]
+include = ["demotape*"]

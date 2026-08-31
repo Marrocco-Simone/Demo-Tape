@@ -1,4 +1,4 @@
-# demo-record
+# demo-tape
 
 Deterministic browser demo recorder. It runs a JSON action pipeline in Chromium,
 records an MP4 of the whole session, and reports a strict success/error
@@ -22,10 +22,10 @@ automatically by `pip install -e .` since it's declared in `pyproject.toml`.
 ### Global CLI (run from any repo)
 
 `pip install -e .` only activates inside this project's venv. To get a global
-`demo-record` command, symlink it onto your PATH:
+`demotape` command, symlink it onto your PATH:
 
 ```bash
-ln -s "$(pwd)/.venv/bin/demo-record" ~/.local/bin/demo-record
+ln -s "$(pwd)/.venv/bin/demotape" ~/.local/bin/demotape
 ```
 
 The symlink runs through the project venv (editable install), so code changes
@@ -38,10 +38,10 @@ installed (Playwright cache — `playwright install chromium` — or
 ## Usage
 
 ```bash
-demo-record demo.json           # validate + run a pipeline
-demo-record --schema            # print the JSON Schema for a pipeline
-demo-record --example           # print a filled-in example pipeline
-demo-record --validate demo.json  # validate without running
+demotape demo.json           # validate + run a pipeline
+demotape --schema            # print the JSON Schema for a pipeline
+demotape --example           # print a filled-in example pipeline
+demotape --validate demo.json  # validate without running
 ```
 
 ## Pipeline format
@@ -178,8 +178,8 @@ self-checks a demo pipeline:
 ## Demo pipeline
 
 After building the app, write `demo.json` describing a short happy-path
-walkthrough of what you built. Schema: run `demo-record --schema`; a filled
-example: `demo-record --example`.
+walkthrough of what you built. Schema: run `demotape --schema`; a filled
+example: `demotape --example`.
 
 Rules:
 - Target elements by the CSS selectors / ids present in the code you wrote.
@@ -191,10 +191,10 @@ Rules:
 - Emit narration AFTER the action it describes (click → title/description), not
   before: text changes right after an action apply instantly.
 - If you target a dev server, give the first `navigate` a high `wait_seconds` (~8s) — routes compile on first request.
-- ALWAYS run `demo-record --validate demo.json` and fix any errors until it
+- ALWAYS run `demotape --validate demo.json` and fix any errors until it
   prints OK before telling the user it's ready.
 
-The user runs `demo-record demo.json` to produce the video. Exit codes: `0` ok,
+The user runs `demotape demo.json` to produce the video. Exit codes: `0` ok,
 `1` failure or browser closed, `130` interrupted. On failure the tool prints
 `ERROR step N ...` (for assert_text it also prints the final URL + what the
 page says) and `LAST_SCREENSHOT <path>`; on a stop it prints `STOPPED <reason>`

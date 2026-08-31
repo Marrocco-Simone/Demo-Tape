@@ -33,10 +33,10 @@ from browser_use.browser.profile import ViewportSize
 from browser_use.browser.session import BrowserSession
 from browser_use.browser.video_recorder import VideoRecorderService
 
-from demo_record.actions import ActionError, ActionRunner, DoneSignal
-from demo_record.spec import DemoSpec
+from demotape.actions import ActionError, ActionRunner, DoneSignal
+from demotape.spec import DemoSpec
 
-logger = logging.getLogger("demo_record")
+logger = logging.getLogger("demotape")
 
 # Narration steps pair into one visual change; used by the step-loop pacing.
 OVERLAY_ACTIONS = ("title", "description")
@@ -273,7 +273,7 @@ def _create_quiet_profile() -> Path:
     browser and first-run promos. Prewriting Chromium's Preferences turns them
     all off before the first launch.
     """
-    user_data_dir = Path(tempfile.mkdtemp(prefix="demo-record-profile-"))
+    user_data_dir = Path(tempfile.mkdtemp(prefix="demotape-profile-"))
     default_dir = user_data_dir / "Default"
     default_dir.mkdir(parents=True, exist_ok=True)
     prefs = {

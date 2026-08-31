@@ -2,7 +2,7 @@
 
 The whole point of this module is to fail fast with precise, per-field errors
 before any browser is launched. `DemoSpec.model_json_schema()` powers
-`demo-record --schema` so agents can generate correct pipelines without guessing.
+`demotape --schema` so agents can generate correct pipelines without guessing.
 """
 
 from __future__ import annotations

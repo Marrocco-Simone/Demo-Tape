@@ -1,10 +1,10 @@
-"""demo-record CLI.
+"""demotape CLI.
 
 Usage:
-  demo-record demo.json          Validate and run a pipeline.
-  demo-record --schema           Print the JSON Schema for a pipeline file.
-  demo-record --example          Print a filled-in example pipeline.
-  demo-record --validate FILE    Validate a pipeline file without running it.
+  demotape demo.json          Validate and run a pipeline.
+  demotape --schema           Print the JSON Schema for a pipeline file.
+  demotape --example          Print a filled-in example pipeline.
+  demotape --validate FILE    Validate a pipeline file without running it.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ import sys
 
 from pydantic import ValidationError
 
-from demo_record.runner import run
-from demo_record.spec import DemoSpec
+from demotape.runner import run
+from demotape.spec import DemoSpec
 
 EXAMPLE = {
     "viewport": {"width": 1536, "height": 864},
@@ -66,7 +66,7 @@ def _load_and_validate(path: str) -> DemoSpec:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="demo-record",
+        prog="demotape",
         description="Run a JSON action pipeline in Chromium, recording an MP4. No LLM.",
     )
     parser.add_argument("pipeline", nargs="?", help="Path to the pipeline JSON file.")

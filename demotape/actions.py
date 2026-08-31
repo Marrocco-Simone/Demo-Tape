@@ -22,7 +22,7 @@ from typing import Any
 
 from browser_use.browser.session import BrowserSession, CDPSession
 
-from demo_record.spec import Step
+from demotape.spec import Step
 
 # Seconds to wait after scrolling an element into view, so the smooth
 # scroll motion is captured on video before the interaction happens.
@@ -48,9 +48,9 @@ RIPPLE_LEAD_S = 0.55
 _FX_SCRIPT = f"""
 (() => {{
   if (!window.__demoFx) {{
-  if (!document.getElementById('demo-record-fx-style')) {{
+  if (!document.getElementById('demotape-fx-style')) {{
     const style = document.createElement('style');
-    style.id = 'demo-record-fx-style';
+    style.id = 'demotape-fx-style';
     style.textContent = `
       @keyframes demoRingBreath {{ 0%,100% {{ transform: scale(1); }} 50% {{ transform: scale(1.03); }} }}
       @keyframes demoRipple {{
@@ -69,7 +69,7 @@ _FX_SCRIPT = f"""
       const r = el.getBoundingClientRect();
       const pad = 8;
       const ring = document.createElement('div');
-      ring.id = 'demo-record-fx-ring';
+      ring.id = 'demotape-fx-ring';
       ring.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483644;'
         + 'border:3px solid {_FX_ACCENT};border-radius:12px;'
         + 'box-shadow:0 0 0 4px rgba(56,189,248,0.25), 0 0 26px rgba(56,189,248,0.55)'
@@ -101,7 +101,7 @@ _FX_SCRIPT = f"""
       return {{ ok: true }};
     }},
     clear() {{
-      const ring = document.getElementById('demo-record-fx-ring');
+      const ring = document.getElementById('demotape-fx-ring');
       if (ring) ring.remove();
       return {{ ok: true }};
     }},
@@ -165,19 +165,19 @@ class ActionRunner:
         }
         expr = f"""
 (() => {{
-  window.__demoRecordOverlayState = {json.dumps(state)};
-  if (!window.__demoRecordRenderOverlay) {{
+  window.__demotapeOverlayState = {json.dumps(state)};
+  if (!window.__demotapeRenderOverlay) {{
     const justify = a => a === 'left' ? 'flex-start' : a === 'right' ? 'flex-end' : 'center';
     const BAR_CSS = {json.dumps(_OVERLAY_BAR_CSS)};
     const TITLE_CSS = {json.dumps(_TITLE_LINE_CSS)};
     const DESC_CSS = {json.dumps(_DESCRIPTION_LINE_CSS)};
-    window.__demoRecordRenderOverlay = (state) => {{
+    window.__demotapeRenderOverlay = (state) => {{
       const title = state.title && state.title.text ? state.title : null;
       const desc = state.description && state.description.text ? state.description : null;
-      let root = document.getElementById('demo-record-overlay');
+      let root = document.getElementById('demotape-overlay');
       if (!root) {{
         root = document.createElement('div');
-        root.id = 'demo-record-overlay';
+        root.id = 'demotape-overlay';
         root.style.cssText = 'position:fixed;inset:0;pointer-events:none;'
           + 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;';
         (document.body || document.documentElement).appendChild(root);
@@ -219,18 +219,18 @@ class ActionRunner:
       }}
     }};
   }}
-  if (!window.__demoRecordOverlayObserver) {{
-    window.__demoRecordOverlayObserver = new MutationObserver(() => {{
-      const st = window.__demoRecordOverlayState;
+  if (!window.__demotapeOverlayObserver) {{
+    window.__demotapeOverlayObserver = new MutationObserver(() => {{
+      const st = window.__demotapeOverlayState;
       const hasContent = st && ((st.title && st.title.text) || (st.description && st.description.text));
-      const root = document.getElementById('demo-record-overlay');
+      const root = document.getElementById('demotape-overlay');
       if (hasContent && (!root || !root.childElementCount)) {{
-        requestAnimationFrame(() => window.__demoRecordRenderOverlay(window.__demoRecordOverlayState));
+        requestAnimationFrame(() => window.__demotapeRenderOverlay(window.__demotapeOverlayState));
       }}
     }});
-    window.__demoRecordOverlayObserver.observe(document.documentElement, {{ childList: true, subtree: true }});
+    window.__demotapeOverlayObserver.observe(document.documentElement, {{ childList: true, subtree: true }});
   }}
-  window.__demoRecordRenderOverlay(window.__demoRecordOverlayState);
+  window.__demotapeRenderOverlay(window.__demotapeOverlayState);
   return {{ ok: true }};
 }})()
 """
@@ -277,7 +277,7 @@ class ActionRunner:
         while True:
             try:
                 complete = await self._eval(
-                    "document.readyState === 'complete' && window.__demoRecordToken === undefined"
+                    "document.readyState === 'complete' && window.__demotapeToken === undefined"
                 )
             except ActionError:  # noqa: BLE001 - the old execution context dies mid-navigation
                 complete = False
@@ -291,7 +291,7 @@ class ActionRunner:
     async def _plant_navigation_token(self) -> None:
         """Mark the outgoing document so _wait_for_page_ready can detect the new one."""
         try:
-            await self._eval("window.__demoRecordToken = 1")
+            await self._eval("window.__demotapeToken = 1")
         except ActionError:  # noqa: BLE001 - context can already be gone
             pass
 
