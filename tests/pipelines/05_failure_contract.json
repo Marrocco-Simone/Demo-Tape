@@ -1,0 +1,1 @@
+{ "headless":true, "output_dir":"./demo_out_fail", "steps":[ {"action":"navigate","url":"http://localhost:8931/index.html"}, {"action":"click","selector":"#does-not-exist"} ] }

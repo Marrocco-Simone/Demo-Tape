@@ -1,0 +1,18 @@
+{
+  "headless": true,
+  "output_dir": "./demo_out_drag",
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:8931/slider.html" },
+    { "action": "drag", "selector": "[role=slider]", "to": 0.7 },
+    { "action": "assert_text", "text": "Sweetness 70" },
+    { "action": "drag", "selector": "[role=slider]", "to": 0.2, "from": 0.7, "duration_seconds": 0.5 },
+    { "action": "assert_text", "text": "Sweetness 20" },
+    { "action": "drag", "selector": "[role=slider] .thumb", "to_selector": "[role=slider]", "to": 0.4, "duration_seconds": 0.8 },
+    { "action": "assert_text", "text": "Sweetness 40" },
+    { "action": "drag", "selector": "#card-build", "to_selector": "#card-design", "duration_seconds": 0.8 },
+    { "action": "assert_text", "text": "Order: Build, Design, Ship" },
+    { "action": "drag", "selector": "#card-ship", "to_selector": "#card-build", "duration_seconds": 0.8 },
+    { "action": "assert_text", "text": "Order: Ship, Build, Design" },
+    { "action": "done" }
+  ]
+}

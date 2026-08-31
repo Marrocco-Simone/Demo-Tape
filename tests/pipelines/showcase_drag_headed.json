@@ -1,0 +1,22 @@
+{
+  "headless": false,
+  "output_dir": "./demo_out_drag_live",
+  "delay_ms": 600,
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:8931/slider.html", "wait_seconds": 1.0 },
+    { "action": "title", "text": "Drag & sliders", "align": "left" },
+    { "action": "description", "text": "Slider: press at the edge, ease-in-out to 70%" },
+    { "action": "drag", "selector": "[role=slider]", "to": 0.7, "duration_seconds": 1.2 },
+    { "action": "wait", "seconds": 0.6 },
+    { "action": "description", "text": "Thumb-grab: grab the thumb where it is, drag to 40%" },
+    { "action": "drag", "selector": "[role=slider] .thumb", "to_selector": "[role=slider]", "to": 0.4, "duration_seconds": 1.2 },
+    { "action": "wait", "seconds": 0.6 },
+    { "action": "description", "text": "Reorder: Build to the top (page animates the swap)" },
+    { "action": "drag", "selector": "#card-build", "to_selector": "#card-design", "duration_seconds": 1.2 },
+    { "action": "wait", "seconds": 0.6 },
+    { "action": "description", "text": "Ship jumps to the top" },
+    { "action": "drag", "selector": "#card-ship", "to_selector": "#card-build", "duration_seconds": 1.2 },
+    { "action": "assert_text", "text": "Order: Ship, Build, Design" },
+    { "action": "done" }
+  ]
+}

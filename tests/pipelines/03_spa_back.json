@@ -1,0 +1,17 @@
+{
+  "headless": true,
+  "output_dir": "./demo_out_spa",
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:8931/router.html" },
+    { "action": "assert_text", "text": "home view" },
+    { "action": "click", "selector": "#nav-one" },
+    { "action": "assert_text", "text": "one view" },
+    { "action": "back", "wait_seconds": 0.5 },
+    { "action": "assert_text", "text": "home view" },
+    { "action": "click", "selector": "#nav-two" },
+    { "action": "assert_text", "text": "two view" },
+    { "action": "back", "wait_seconds": 0.5 },
+    { "action": "assert_text", "text": "home view" },
+    { "action": "done" }
+  ]
+}
