@@ -12,7 +12,8 @@ trap 'kill "$SERVER_PID" 2>/dev/null' EXIT
 sleep 1
 
 fail=0
-for p in tests/pipelines/0[1-4]*.json; do
+for p in tests/pipelines/0*.json; do
+  case "$p" in *failure_contract*) continue ;; esac
   echo "== $p"
   if ! ./.venv/bin/demotape "$p" >/dev/null 2>&1; then
     echo "   FAILED"

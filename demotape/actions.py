@@ -401,16 +401,7 @@ class ActionRunner:
         await asyncio.sleep(RING_LEAD_S)
         await self._fx_ripple(selector)
         await asyncio.sleep(RIPPLE_LEAD_S)
-        expr = f"""
-(() => {{
-  const el = document.querySelector({json.dumps(selector)});
-  if (!el) return {{ ok: false }};
-  el.click();
-  return {{ ok: true }};
-}})()
-"""
-        value = await self._eval(expr)
-        if not value or not value.get("ok"):
+        if not await self._press_at_center(selector):
             raise ActionError(f'could not click selector "{selector}"')
         # The click may have replaced the page under the ring; drop it now
         # instead of letting it float over new content until its timeout.
@@ -427,8 +418,19 @@ class ActionRunner:
   if (!el) return {{ ok: false }};
   el.focus();
   if ({str(clear).lower()}) {{
-    if ('value' in el) el.value = '';
-    else el.textContent = '';
+    if ('value' in el) {{
+      // A plain `el.value = ''` is invisible to React: the component keeps its
+      // state and restores the old text on the next keystroke, so the typed
+      // text lands appended. Going through the native setter and firing a real
+      // input event makes the controlled component drop the old value.
+      const proto = Object.getPrototypeOf(el);
+      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (descriptor && descriptor.set) descriptor.set.call(el, '');
+      else el.value = '';
+      el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    }} else {{
+      el.textContent = '';
+    }}
   }}
   return {{ ok: true }};
 }})()
@@ -458,6 +460,38 @@ class ActionRunner:
             )
             if type_delay_ms > 0:
                 await asyncio.sleep(type_delay_ms / 1000.0)
+
+    async def _press_at_center(self, selector: str) -> bool:
+        """Click the center of `selector` with a full pointer sequence.
+
+        `el.click()` fires the click event alone, so a control that listens for
+        mousedown - a menu row that has to act before the input it belongs to
+        loses focus - never runs. The events are dispatched from the page
+        instead of through CDP input: CDP mouse events do not reach the page
+        while the recorder drives it, and a bubbling MouseEvent is what the
+        framework listens for either way.
+
+        Returns False when the element is gone, so the caller can report it.
+        """
+        box = await self._measure_box(selector)
+        if not box:
+            return False
+        x = box["x"] + box["w"] / 2
+        y = box["y"] + box["h"] / 2
+        expr = f"""
+(() => {{
+  const el = document.querySelector({json.dumps(selector)});
+  if (!el) return {{ ok: false }};
+  const at = {{ bubbles: true, cancelable: true, view: window,
+    clientX: {x}, clientY: {y}, button: 0, buttons: 1 }};
+  el.dispatchEvent(new MouseEvent('mousedown', at));
+  el.dispatchEvent(new MouseEvent('mouseup', {{ ...at, buttons: 0 }}));
+  el.dispatchEvent(new MouseEvent('click', {{ ...at, buttons: 0 }}));
+  return {{ ok: true }};
+}})()
+"""
+        value = await self._eval(expr)
+        return bool(value and value.get("ok"))
 
     async def _measure_box(self, selector: str) -> dict[str, Any] | None:
         """Viewport-relative bounding box of `selector`, or None if missing."""

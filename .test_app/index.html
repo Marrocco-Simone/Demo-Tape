@@ -17,6 +17,9 @@
     <h1>Test App</h1>
     <p>Scroll target below the fold.</p>
     <button id="get-started">Get started</button>
+    <button id="mousedown-only">Mousedown only</button>
+    <a id="anchor-nav" href="#form-section">Anchor link</a>
+    <p id="md-status">row untouched</p>
   </section>
 
   <section class="form" id="form">
@@ -39,5 +42,17 @@
       document.getElementById('welcome').style.display = 'block';
     });
   </script>
+<script>
+  // Regression control for the click rewrite: reacts to mousedown only, the
+  // pattern el.click() could never trigger.
+  document.getElementById('mousedown-only').addEventListener('mousedown', () => {
+    document.getElementById('md-status').textContent = 'row activated';
+  });
+  // A hashchange proves the anchor's navigation actually ran (activation
+  // behavior), not just that a click listener fired.
+  window.addEventListener('hashchange', () => {
+    document.getElementById('md-status').textContent = 'anchor navigated';
+  });
+</script>
 </body>
 </html>
