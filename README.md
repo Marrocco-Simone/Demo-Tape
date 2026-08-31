@@ -164,12 +164,11 @@ Notes:
     a `description` step (nothing between them), the inter-step pause is
     skipped, so the viewer never sees a mismatched pair (new title + old
     description). Emit them as a pair at every chapter change.
-  - **Change text AFTER the action it describes**: an overlay change that
-    directly follows an action (click, type, navigate, …) applies immediately,
-    with no pause — the narration lands on the frame the action produced.
-    Changing text before an action keeps the normal pause first. Two overlay
-    changes back to back (title → title) also keep the pause between them, so
-    each state stays readable.
+  - **Change text BEFORE the action it describes**: the action after a text
+    change starts immediately, so the narration covers what is about to happen
+    (and, with `text_to_speech`, the voice speaks while the action runs). Two
+    overlay changes back to back (title → title) keep the pause between them,
+    so each state stays readable.
   - **Narration survives navigation**: set it once and it re-appears on every
     page — including before the first `navigate` — and it re-applies itself if
     the app replaces its DOM mid-run (loading screens, soft navigation).
@@ -181,8 +180,10 @@ Notes:
 - **Dev servers**: a first `navigate` against a dev server (Next.js, etc.) compiles
   the route on first request, so give it room: `{ "action": "navigate", "url": "...",
   "wait_seconds": 8 }`. Tune down once the route is warm.
-- **Pacing**: `delay_ms` (default `500`) is the rhythm between steps. Lower it for a
-  snappier video; add explicit `wait` steps where the app needs a real pause.
+- **Pacing**: `delay_ms` (default `500`) is the rhythm between two consecutive
+  actions — a text change and the action it describes run back-to-back. Lower
+  it for a snappier video; add explicit `wait` steps where the app needs a
+  real pause.
 
 ## Output contract
 
@@ -219,8 +220,8 @@ Rules:
 - Use top-level `delay_ms` (default 500) for pacing; add `wait` steps for longer transitions.
 - Narrate chapters with a `title` step immediately followed by a `description`
   step (adjacent, nothing between) — the tool then applies them as one change.
-- Emit narration AFTER the action it describes (click → title/description), not
-  before: text changes right after an action apply instantly.
+- Emit narration BEFORE the action it describes (title/description → click):
+  the action starts immediately after its text change.
 - If you target a dev server, give the first `navigate` a high `wait_seconds` (~8s) — routes compile on first request.
 - ALWAYS run `demotape --validate demo.json` and fix any errors until it
   prints OK before telling the user it's ready.
