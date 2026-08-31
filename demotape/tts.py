@@ -54,8 +54,14 @@ class Narrator:
         self._kokoro: object | None = None
 
     async def ensure_ready(self) -> None:
-        """Load the engine (downloading the model on first use)."""
+        """Load the engine (downloading the model on first use) and warm it up.
+
+        The first real synthesis pays ONNX session initialization and kernel
+        warm-up; doing it here keeps that CPU spike out of the recording,
+        where it would stall frames between a text change and its narration.
+        """
         await asyncio.to_thread(self._load)
+        await self.synthesize("Hello.")
 
     def _load(self) -> None:
         if self._kokoro is not None:

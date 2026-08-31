@@ -76,6 +76,8 @@ class _ScreencastRecorder:
         self._pending: set[asyncio.Task] = set()
         self._last_data: str | None = None
         self._last_ts: float | None = None
+        self._first_ts: float | None = None
+        self._last_ts_mono: float | None = None
         self._written = 0
         self._dropped = 0
         self._started_at = 0.0
@@ -133,8 +135,28 @@ class _ScreencastRecorder:
             self._dropped += 1
             return
         if ts is not None:
+            if self._first_ts is None:
+                self._first_ts = ts
             self._last_ts = ts
+            self._last_ts_mono = time.monotonic()
         self._last_data = data
+
+    def video_time_now(self) -> float:
+        """`now` in the video file's time base (seconds from the first frame).
+
+        The file is paced by screencast metadata timestamps (gap-fill and the
+        sub-frame filter both run on them), and its second zero is the first
+        painted frame, not the moment the screencast started - so narration
+        offsets must be computed on the same clock or every clip lands late
+        by however long the first paint took. Extrapolating the last frame's
+        screencast timestamp to the present keeps narration and picture on
+        one clock even while the page is static and no frames arrive.
+        """
+        if self._last_ts is None or self._last_ts_mono is None:
+            return time.monotonic() - self._started_at
+        return (
+            self._last_ts + (time.monotonic() - self._last_ts_mono) - self._first_ts
+        )
 
     def _drain(self) -> None:
         try:
@@ -491,10 +513,14 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
         async def _narrate(step_index: int) -> bool:
             """Speak the current overlay text, holding the video while it plays.
 
-            Returns True when a clip was placed (the caller then skips the
-            inter-step pause - narration IS the pacing). Synthesis or engine
-            failures degrade to a silent video: the recording is too valuable
-            to lose over one bad clip.
+            The clip is anchored to the moment the text rendered (before
+            synthesis), on the recorder's video clock - so the voice starts
+            exactly when the text appears no matter how long synthesis takes,
+            and the hold is whatever remains of the clip after that. Returns
+            True when a clip was placed (the caller then skips the inter-step
+            pause - narration IS the pacing). Synthesis or engine failures
+            degrade to a silent video: the recording is too valuable to lose
+            over one bad clip.
             """
             if narrator is None or recorder is None:
                 return False
@@ -502,6 +528,7 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             if not text or text == last_narrated[0]:
                 return False
             last_narrated[0] = text
+            t_text = recorder.video_time_now()
             try:
                 clip = await narrator.synthesize(text)
             except Exception as exc:  # noqa: BLE001
@@ -509,10 +536,12 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                     "step %d: narration failed (%s); continuing silent", step_index, exc
                 )
                 return False
-            clip.start_s = max(0.0, recorder.elapsed())
+            duration_s = len(clip.samples) / clip.sample_rate
+            clip.start_s = t_text
             clips.append(clip)
-            logger.info("step %d: narrating %.1fs", step_index, len(clip.samples) / clip.sample_rate)
-            await asyncio.sleep(len(clip.samples) / clip.sample_rate)
+            logger.info("step %d: narrating %.1fs", step_index, duration_s)
+            hold = duration_s - (recorder.video_time_now() - t_text)
+            await asyncio.sleep(max(0.0, hold))
             return True
 
         for index, step in enumerate(spec.steps, start=1):
