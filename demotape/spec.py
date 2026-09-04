@@ -11,6 +11,17 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Pacing constants shared by the runner (which enforces them on the video
+# clock), the --estimate arithmetic, and the Pipeline builder's docs.
+#: words a second of silent reading, measured against full takes
+READING_WORDS_PER_SECOND = 3.5
+#: no caption stays up for less than this, however short it is
+READING_FLOOR_S = 2.3
+#: nor longer than this, however long it is
+READING_CEILING_S = 11.0
+#: words a second the TTS voice reads, measured on af_heart over a full take
+TTS_WORDS_PER_SECOND = 3.55
+
 
 class Viewport(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -158,6 +169,29 @@ class DescriptionStep(BaseModel):
     align: Literal["left", "center", "right"] = Field(default="center", description="Horizontal alignment of the description bar.")
 
 
+class SayStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["say"]
+    title: str = Field(
+        default="",
+        description="Overlay title text. Empty string hides the title.",
+    )
+    description: str = Field(
+        default="",
+        description="Overlay description text, and the narration voice's spoken text "
+        "(the title is spoken when this is empty). Empty string hides the description.",
+    )
+    position: Literal["top", "bottom"] = Field(
+        default="top",
+        description="Vertical placement of the narration bar. Both bars share it, so "
+        "they render as one card (title on the first line, description under it).",
+    )
+    align: Literal["left", "center", "right"] = Field(
+        default="center", description="Horizontal alignment of the narration bar."
+    )
+
+
 class AssertTextStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -197,6 +231,7 @@ Step = Annotated[
         ScrollStep,
         TitleStep,
         DescriptionStep,
+        SayStep,
         AssertTextStep,
         AssertValueStep,
         DoneStep,
@@ -235,12 +270,52 @@ class DemoSpec(BaseModel):
         "af_heart, bf_emma, im_nicola (Italian), jm_kumo. Only meaningful with "
         "text_to_speech.",
     )
+    reading_pace: float | None = Field(
+        default=None,
+        gt=0,
+        description="Silent-reading pace in words per second (measured: 3.5). When set, "
+        "every caption stays up for at least words / reading_pace (clamped to "
+        f"{READING_FLOOR_S}-{READING_CEILING_S}s) before the next text change — measured on the "
+        "video clock, so app work that ran under the caption counts toward it. With "
+        "text_to_speech the hold is max(voice end, reading time). Unset: no reading hold.",
+    )
     steps: list[Step] = Field(min_length=1)
 
 
 def _shorten(text: str, limit: int = 60) -> str:
     text = text.replace("\n", " ")
     return f'"{text[:limit]}{"…" if len(text) > limit else ""}"'
+
+
+def narration_event_texts(steps: list[Step]) -> list[str]:
+    """The text of each narration event, in order.
+
+    One event per visual text change, mirroring the runner's pairing: a `title`
+    immediately followed by a `description` is ONE event spoken as the
+    description; `say` is one event; a lone `title` (or `description`) is its
+    own event spoken as its text. Used by the duration estimate.
+    """
+    events: list[str] = []
+    i = 0
+    while i < len(steps):
+        step = steps[i]
+        if step.action == "say":
+            events.append(step.description or step.title)
+            i += 1
+        elif step.action == "title":
+            nxt = steps[i + 1] if i + 1 < len(steps) else None
+            if nxt is not None and nxt.action == "description":
+                events.append(nxt.text or step.text)
+                i += 2
+            else:
+                events.append(step.text)
+                i += 1
+        elif step.action == "description":
+            events.append(step.text)
+            i += 1
+        else:
+            i += 1
+    return [text for text in events if text.strip()]
 
 
 def describe_step(step: Step) -> str:
@@ -263,6 +338,9 @@ def describe_step(step: Step) -> str:
         return f"{step.selector} option={step.option}"  # type: ignore[union-attr]
     if kind == "title" or kind == "description":
         return _shorten(step.text)  # type: ignore[union-attr]
+    if kind == "say":
+        text = step.description or step.title  # type: ignore[union-attr]
+        return _shorten(text)
     if kind == "assert_text":
         return _shorten(step.text)  # type: ignore[union-attr]
     if kind == "assert_value":

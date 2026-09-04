@@ -5,6 +5,7 @@ Usage:
   demotape --schema           Print the JSON Schema for a pipeline file.
   demotape --example          Print a filled-in example pipeline.
   demotape --validate FILE    Validate a pipeline file without running it.
+  demotape --estimate FILE    Print the estimated duration without running it.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import sys
 
 from pydantic import ValidationError
 
+from demotape.estimate import estimate_spec
 from demotape.runner import run
 from demotape.spec import DemoSpec
 
@@ -42,7 +44,7 @@ EXAMPLE = {
             "type_delay_ms": 70,
         },
         {"action": "select", "selector": "select#plan", "option": "pro"},
-        {"action": "description", "text": "Choosing the Pro plan"},
+        {"action": "say", "title": "Choosing a plan", "description": "Pro unlocks the athletes section"},
         {"action": "click", "selector": "#continue"},
         {"action": "assert_text", "text": "Welcome"},
         {"action": "done"},
@@ -73,6 +75,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--schema", action="store_true", help="Print the pipeline JSON Schema and exit.")
     parser.add_argument("--example", action="store_true", help="Print an example pipeline and exit.")
     parser.add_argument("--validate", metavar="FILE", help="Validate FILE as a pipeline and exit.")
+    parser.add_argument(
+        "--estimate", metavar="FILE", help="Validate FILE and print its estimated duration, no browser."
+    )
     args = parser.parse_args(argv)
 
     if args.schema:
@@ -85,8 +90,12 @@ def main(argv: list[str] | None = None) -> int:
         spec = _load_and_validate(args.validate)
         print(f"OK valid pipeline: {len(spec.steps)} steps")
         return 0
+    if args.estimate:
+        spec = _load_and_validate(args.estimate)
+        print(estimate_spec(spec).format())
+        return 0
     if not args.pipeline:
-        parser.error("provide a pipeline JSON file (or use --schema/--example/--validate)")
+        parser.error("provide a pipeline JSON file (or use --schema/--example/--validate/--estimate)")
 
     spec = _load_and_validate(args.pipeline)
     result = run(spec)

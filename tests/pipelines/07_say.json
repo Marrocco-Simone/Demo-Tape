@@ -1,0 +1,18 @@
+{
+  "headless": true,
+  "output_dir": "./demo_out_say",
+  "reading_pace": 3.5,
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:8931/index.html" },
+    { "action": "say", "title": "Sign up", "description": "Create your account in seconds", "position": "top", "align": "left" },
+    { "action": "click", "selector": "#get-started" },
+    { "action": "type", "selector": "input[name=email]", "text": "demo@acme.com" },
+    { "action": "assert_value", "selector": "input[name=email]", "value": "demo@acme.com" },
+    { "action": "say", "title": "Pick a plan", "description": "Pro unlocks everything" },
+    { "action": "select", "selector": "select#plan", "option": "pro" },
+    { "action": "click", "selector": "#continue" },
+    { "action": "assert_text", "text": "Welcome" },
+    { "action": "say", "title": "", "description": "" },
+    { "action": "done" }
+  ]
+}

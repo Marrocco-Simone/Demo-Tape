@@ -246,6 +246,18 @@ class ActionRunner:
         self._overlay["description"] = {"text": text, "position": position, "align": align}
         await self._render_overlay()
 
+    async def say(self, title: str, description: str, position: str, align: str) -> None:
+        """Set both bars as one text change.
+
+        Unlike the title-then-description pair convention (two renders, paired
+        only when adjacent), `say` writes both slots and renders once - so the
+        pair can never be split by an action in between, and a stale bar from
+        an earlier chapter can't survive beside the new text.
+        """
+        self._overlay["title"] = {"text": title, "position": position, "align": align}
+        self._overlay["description"] = {"text": description, "position": position, "align": align}
+        await self._render_overlay()
+
     def narration_text(self) -> str:
         """The text a narration voice speaks for the current overlay state.
 
@@ -783,6 +795,8 @@ class ActionRunner:
             await self.title(step.text, step.position, step.align)
         elif action == "description":
             await self.description(step.text, step.position, step.align)
+        elif action == "say":
+            await self.say(step.title, step.description, step.position, step.align)
         elif action == "assert_text":
             await self.assert_text(step.text, step.case_sensitive)
         elif action == "assert_value":

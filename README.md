@@ -45,10 +45,11 @@ installed (Playwright cache — `playwright install chromium` — or
 ## Usage
 
 ```bash
-demotape demo.json           # validate + run a pipeline
-demotape --schema            # print the JSON Schema for a pipeline
-demotape --example           # print a filled-in example pipeline
+demotape demo.json             # validate + run a pipeline
+demotape --schema              # print the JSON Schema for a pipeline
+demotape --example             # print a filled-in example pipeline
 demotape --validate demo.json  # validate without running
+demotape --estimate demo.json  # print the estimated duration without running
 ```
 
 ## Pipeline format
@@ -63,6 +64,7 @@ A pipeline is a JSON object:
 | `delay_ms`   | int     | `500`         | Pause between two consecutive actions. A text change and the action it describes run back-to-back — author **text-first** (title/description, then the action), and the action starts immediately. |
 | `text_to_speech` | bool | `false`      | Narrate the overlay text with a local TTS model (see below). |
 | `tts_voice`  | string  | `af_heart`    | Kokoro voice; the first letter picks the language (e.g. `im_nicola` Italian, `bf_emma` British English). Only with `text_to_speech`. |
+| `reading_pace` | float | —             | Silent-reading pace in words/second (measured: 3.5). When set, every caption stays up for at least `words / reading_pace` seconds (clamped 2.3–11s) before the next text change — measured on the video's clock, so app work that ran under the caption counts and a slow app adds no dead air. With `text_to_speech` the hold is `max(voice end, reading time)`. Unset: no reading hold. |
 | `steps`      | array   | —             | Ordered list of steps (below). |
 
 Each step is a flat object with an `action` plus its params:
@@ -80,6 +82,7 @@ Each step is a flat object with an `action` plus its params:
 { "action": "highlight", "selector": "#pricing", "duration_seconds": 2.0, "spotlight": false }
 { "action": "title", "text": "Sign up", "position": "top", "align": "left" }
 { "action": "description", "text": "Choose a plan to unlock athletes", "position": "bottom", "align": "center" }
+{ "action": "say", "title": "Choosing a plan", "description": "Pro unlocks the athletes section", "position": "top", "align": "left" }
 { "action": "assert_text", "text": "Welcome" }
 { "action": "assert_value", "selector": "input[name=email]", "value": "demo@acme.com" }
 { "action": "done" }
@@ -152,6 +155,16 @@ Notes:
 - **`assert_value`** stops the pipeline unless the element (input, textarea,
   select) holds exactly `value`. Use it right after `type`/`select` to catch a
   field silently dropping input — `assert_text` can't see input values.
+- **`say`** is the one-step alternative to the `title`+`description` pair:
+  `{"action": "say", "title": "Choosing a plan", "description": "Pro unlocks the
+  athletes section"}` sets both bars as ONE text change — one render, one
+  narration event, no pairing rules to get wrong. The `description` is the
+  spoken text (the `title` when the description is empty); an empty field hides
+  that slot, and `say` with both empty clears the caption. Both bars share
+  `position` (default `top`), so they render as one card — title on the first
+  line, description under it — and `align` (default `center`) places it.
+  Prefer `say` over pairs in new pipelines; pairs keep working for
+  backward compatibility.
 - **`title` / `description`** render narration text on the video, live: fixed,
   pointer-transparent pills injected into the app page. The description uses a
   smaller font and can carry more text; long text wraps instead of being cut
@@ -220,9 +233,10 @@ Rules:
 - Do NOT invent element indices. Always use selectors.
 - Set `headless` to whatever the user asked for (default false).
 - Use top-level `delay_ms` (default 500) for pacing; add `wait` steps for longer transitions.
-- Narrate chapters with a `title` step immediately followed by a `description`
-  step (adjacent, nothing between) — the tool then applies them as one change.
-- Emit narration BEFORE the action it describes (title/description → click):
+- Narrate chapters with a `say` step (`{"action": "say", "title": ..., "description": ...}`)
+  — both bars render as one text change. A `title` step immediately followed by
+  a `description` step (adjacent, nothing between) also works.
+- Emit narration BEFORE the action it describes (say → click):
   the action starts immediately after its text change.
 - If you target a dev server, give the first `navigate` a high `wait_seconds` (~8s) — routes compile on first request.
 - ALWAYS run `demotape --validate demo.json` and fix any errors until it
@@ -234,6 +248,45 @@ The user runs `demotape demo.json` to produce the video. Exit codes: `0` ok,
 page says) and `LAST_SCREENSHOT <path>`; on a stop it prints `STOPPED <reason>`
 — report that back.
 ```
+
+## Writing a generator (instead of hand-writing JSON)
+
+Past ~50 steps, hand-written pipeline JSON breaks down: repeated selector soup,
+no comments, no computation, no way to state invariants. The pattern that
+scales is a **small generator script** (Python, or whatever your agent writes)
+that holds the selectors and emits the JSON — regenerate the JSON right before
+every recording, and treat the JSON, not the script, as the record-time
+artifact. The tool ships a thin builder for exactly this:
+
+```python
+from demotape import Pipeline
+
+# reading_pace defaults to the measured 3.5 words/s; pass None to disable
+p = Pipeline(base_url="http://localhost:3000", output_dir="./demo_out")
+p.say("Sign up", "Create your account in seconds")
+p.click("#get-started")
+p.type("input[name=email]", "demo@acme.com")
+p.assert_value("input[name=email]", "demo@acme.com")
+p.write("demo.json")  # appends `done`, writes JSON, prints ~duration
+```
+
+Rules that keep generated pipelines maintainable:
+
+- **Keep selectors as named constants** — one point of edit when a brittle
+  Tailwind-class selector changes; every video follows the fix.
+- **Write selector functions for positional targets** (`:nth-of-type(n)`,
+  "the n-th chip") instead of scattering the indices through the steps.
+- **Pair every `say` before the action it describes** — the action starts
+  immediately after the text renders, so the narration covers what is about to
+  happen.
+- **Follow every `type` with `assert_value`** — a silently empty input surfaces
+  much later as a validation error on an unrelated screen; catch it where it
+  happens.
+- **Regenerate the JSON right before recording** — the script is the source of
+  truth; a stale JSON quietly records an old story.
+
+The runner never executes user code: the builder only produces JSON, and the
+JSON file stays the contract (`demotape --validate` / `--estimate` read it).
 
 ## What it does NOT do (by design)
 

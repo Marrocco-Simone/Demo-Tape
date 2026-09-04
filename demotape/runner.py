@@ -35,13 +35,19 @@ from browser_use.browser.session import BrowserSession
 from browser_use.browser.video_recorder import VideoRecorderService
 
 from demotape.actions import ActionError, ActionRunner, DoneSignal
-from demotape.spec import DemoSpec, describe_step
+from demotape.spec import (
+    READING_CEILING_S,
+    READING_FLOOR_S,
+    DemoSpec,
+    describe_step,
+)
 from demotape.tts import NarrationClip, Narrator, mix_clips
 
 logger = logging.getLogger("demotape")
 
-# Narration steps pair into one visual change; used by the step-loop pacing.
-OVERLAY_ACTIONS = ("title", "description")
+# Steps that change the overlay text; each is a narration event. `title` +
+# `description` pair into one event when adjacent; `say` is atomic by itself.
+TEXT_CHANGE_ACTIONS = ("title", "description", "say")
 
 
 @dataclass
@@ -579,22 +585,48 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             print(f"[T+{ts:6.1f}] {msg}", flush=True)
 
         # Narration plays asynchronously: the clip is placed when its text
-        # renders, actions keep running while the voice speaks, and the only
+        # renders, actions keep running while it speaks, and the only
         # pause happens right before the NEXT text change (or at the end of
         # the run), so a change can never cut the speech off.
         narration_end: list[float | None] = [None]
 
-        async def _wait_narration_done() -> None:
-            if narration_end[0] is None or recorder is None:
+        # Reading-pace clock: armed when a narration event completes, on the
+        # video clock, so app work that ran under the caption counts toward
+        # the hold and a slow app adds no dead air.
+        caption_at: list[float] = [0.0]
+        caption_words: list[int] = [0]
+        last_caption: list[str] = [""]
+
+        def _arm_caption() -> None:
+            text = actions.narration_text()
+            if not text or text == last_caption[0] or recorder is None:
                 return
-            target = narration_end[0]
+            last_caption[0] = text
+            caption_at[0] = recorder.video_time_now()
+            caption_words[0] = len(text.split())
+
+        async def _wait_narration_done() -> None:
+            voice = narration_end[0] is not None
+            targets: list[float] = []
+            if narration_end[0] is not None:
+                targets.append(narration_end[0])
+            if spec.reading_pace is not None and caption_words[0] > 0:
+                hold = min(
+                    max(caption_words[0] / spec.reading_pace, READING_FLOOR_S),
+                    READING_CEILING_S,
+                )
+                targets.append(caption_at[0] + hold)
             narration_end[0] = None
+            if not targets or recorder is None:
+                return
+            target = max(targets)
             while True:
                 now = recorder.video_time_now()
                 if now >= target:
                     break
                 await asyncio.sleep(min(0.1, target - now))
-            emit("narration finished")
+            if voice:
+                emit("narration finished")
 
         async def _narrate(step_index: int) -> None:
             """Place a narration clip for the current overlay text.
@@ -638,8 +670,13 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
                 break
             # A text change waits for the running narration to finish, so the
             # voice is never cut; plain actions between two text changes run
-            # while the voice is still speaking.
-            if step.action in OVERLAY_ACTIONS:
+            # while the voice is still speaking. The description half of a
+            # title+description pair renders back-to-back with its title.
+            if step.action in TEXT_CHANGE_ACTIONS and not (
+                index >= 2
+                and step.action == "description"
+                and spec.steps[index - 2].action == "title"
+            ):
                 await _wait_narration_done()
             detail = describe_step(step)
             try:
@@ -671,15 +708,17 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             # overlay pair is complete). delay_ms only paces two consecutive
             # actions, never an action after its text.
             next_step = spec.steps[index] if index < len(spec.steps) else None
-            next_is_overlay = next_step is not None and next_step.action in OVERLAY_ACTIONS
-            if step.action in OVERLAY_ACTIONS:
+            next_is_text = next_step is not None and next_step.action in TEXT_CHANGE_ACTIONS
+            if step.action in TEXT_CHANGE_ACTIONS:
                 # The pair ends where the description does. Waiting for the end
                 # of every overlay run instead would place one clip for two
                 # consecutive pairs, and the first pair would go by unspoken.
-                if next_step is None or next_step.action != "description":
+                # `say` is a pair and its narration in one step.
+                if step.action == "say" or next_step is None or next_step.action != "description":
+                    _arm_caption()
                     await _narrate(index)
                 continue
-            if next_is_overlay:
+            if next_is_text:
                 continue
             if spec.delay_ms > 0:
                 await asyncio.sleep(spec.delay_ms / 1000.0)

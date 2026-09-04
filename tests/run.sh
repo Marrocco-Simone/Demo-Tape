@@ -7,7 +7,10 @@ cd "$(dirname "$0")/.."
 
 PORT=8931
 PY=./.venv/bin/python
-DEMO=./.venv/bin/demotape
+# Invoke the module, not the console script: a moved/renamed venv keeps a
+# stale absolute shebang in .venv/bin/demotape, which fails as "bad
+# interpreter" with stderr discarded here.
+run_demo() { "$PY" -m demotape.cli "$@"; }
 
 "$PY" -m http.server "$PORT" --directory .test_app >/dev/null 2>&1 &
 SERVER_PID=$!
@@ -18,7 +21,7 @@ fail=0
 for p in tests/pipelines/0*.json; do
   case "$p" in *failure_contract*) continue ;; esac
   echo "== $p"
-  out=$("$DEMO" "$p" 2>/dev/null)
+  out=$(run_demo "$p" 2>/dev/null)
   if [ $? -ne 0 ] || ! grep -q "^VIDEO_OK " <<<"$out"; then
     echo "   FAILED"
     echo "$out" | tail -3
@@ -31,7 +34,7 @@ done
 # ERROR names the step, LAST_SCREENSHOT points at the frame, VIDEO_PARTIAL
 # proves footage exists up to the break.
 echo "== tests/pipelines/05_failure_contract.json (must fail with the contract)"
-out=$("$DEMO" tests/pipelines/05_failure_contract.json 2>/dev/null)
+out=$(run_demo tests/pipelines/05_failure_contract.json 2>/dev/null)
 code=$?
 if [ $code -eq 0 ]; then
   echo "   FAILED (unexpectedly succeeded)"
@@ -50,7 +53,7 @@ fi
 # narration (audio stream, matching A/V durations, real speech energy).
 if "$PY" -c "import kokoro_onnx, numpy, soundfile" >/dev/null 2>&1; then
   echo "== tests/pipelines/narration_tts.json"
-  out=$("$DEMO" tests/pipelines/narration_tts.json 2>/dev/null)
+  out=$(run_demo tests/pipelines/narration_tts.json 2>/dev/null)
   if [ $? -ne 0 ] || ! grep -q "^VIDEO_OK " <<<"$out"; then
     echo "   FAILED"
     echo "$out" | tail -3
@@ -66,6 +69,17 @@ if "$PY" -c "import kokoro_onnx, numpy, soundfile" >/dev/null 2>&1; then
 else
   echo "== tests/pipelines/narration_tts.json SKIPPED (tts extra not installed)"
 fi
+
+# Estimate coverage: --estimate is pure arithmetic over every pipeline shape
+# (pairs, say, TTS, reading_pace), so it must parse and estimate them all
+# without a browser.
+echo "== --estimate over all pipelines"
+for p in tests/pipelines/*.json; do
+  if ! run_demo --estimate "$p" >/dev/null; then
+    echo "   FAILED on $p"
+    fail=1
+  fi
+done
 
 if [ "$fail" -eq 0 ]; then echo "ALL PIPELINES PASSED"; else echo "PIPELINES FAILED"; fi
 exit "$fail"
