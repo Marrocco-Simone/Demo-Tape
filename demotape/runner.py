@@ -673,7 +673,10 @@ async def run_pipeline(spec: DemoSpec) -> RunResult:
             next_step = spec.steps[index] if index < len(spec.steps) else None
             next_is_overlay = next_step is not None and next_step.action in OVERLAY_ACTIONS
             if step.action in OVERLAY_ACTIONS:
-                if not next_is_overlay:
+                # The pair ends where the description does. Waiting for the end
+                # of every overlay run instead would place one clip for two
+                # consecutive pairs, and the first pair would go by unspoken.
+                if next_step is None or next_step.action != "description":
                     await _narrate(index)
                 continue
             if next_is_overlay:

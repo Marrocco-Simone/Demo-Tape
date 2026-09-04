@@ -163,7 +163,9 @@ Notes:
   - **Paired steps are atomic**: when a `title` step is immediately followed by
     a `description` step (nothing between them), the inter-step pause is
     skipped, so the viewer never sees a mismatched pair (new title + old
-    description). Emit them as a pair at every chapter change.
+    description). Emit them as a pair at every chapter change. The pair ends at
+    the description, so `title, description, title, description` is two pairs
+    and each one is narrated.
   - **Change text BEFORE the action it describes**: the action after a text
     change starts immediately, so the narration covers what is about to happen
     (and, with `text_to_speech`, the voice speaks while the action runs). Two
