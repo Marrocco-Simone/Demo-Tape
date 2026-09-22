@@ -465,7 +465,7 @@ class ActionRunner:
       el.textContent = '';
     }}
   }}
-  return {{ ok: true }};
+  return {{ ok: true, keyed: ['time','date','datetime-local','month','week'].includes(el.type) }};
 }})()
 """
         value = await self._eval(focus_expr)
@@ -477,17 +477,27 @@ class ActionRunner:
         type_duration_ms = len(text) * type_delay_ms + 900
         await self._fx_ring(selector, type_duration_ms)
 
+        keyed = bool(value.get("keyed"))
         client, session_id = await self._cdp()
         for ch in text:
-            # Every character goes through Input.insertText: it fires a real
-            # input event that React-controlled inputs accept. Plain
-            # dispatchKeyEvent with only type+text is dropped by React's
-            # synthetic event layer (the DOM keeps the char, state does not,
-            # so controlled inputs revert to empty).
-            await client.send.Input.dispatchKeyEvent(
-                params={"type": "keyDown", "key": ch}, session_id=session_id
-            )
-            await client.send.Input.insertText(params={"text": ch}, session_id=session_id)
+            if keyed:
+                # Date and time fields take characters only from keypress events,
+                # which Chromium emits for a keyDown that carries text; they
+                # ignore Input.insertText.
+                await client.send.Input.dispatchKeyEvent(
+                    params={"type": "keyDown", "key": ch, "text": ch, "unmodifiedText": ch},
+                    session_id=session_id,
+                )
+            else:
+                # Every character goes through Input.insertText: it fires a real
+                # input event that React-controlled inputs accept. Plain
+                # dispatchKeyEvent with only type+text is dropped by React's
+                # synthetic event layer (the DOM keeps the char, state does not,
+                # so controlled inputs revert to empty).
+                await client.send.Input.dispatchKeyEvent(
+                    params={"type": "keyDown", "key": ch}, session_id=session_id
+                )
+                await client.send.Input.insertText(params={"text": ch}, session_id=session_id)
             await client.send.Input.dispatchKeyEvent(
                 params={"type": "keyUp", "key": ch}, session_id=session_id
             )

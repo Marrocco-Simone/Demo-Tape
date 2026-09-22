@@ -120,7 +120,10 @@ Notes:
 - **`type`** types the final text letter-by-letter (`type_delay_ms` controls the
   cadence) — it looks human on video, and each character is inserted via CDP
   `Input.insertText`, so **React-controlled inputs keep the text** (plain key
-  events alone get reverted by React's synthetic event layer). Set
+  events alone get reverted by React's synthetic event layer). Date and time
+  inputs (`time`, `date`, `datetime-local`, `month`, `week`) receive keypress
+  events instead, because they ignore `insertText`: type the digits and
+  meridiem as the field expects them (`0900AM` gives `09:00`). Set
   `clear: false` to append.
 - **`select`** scrolls to a native `<select>`, picks the option (by value or
   visible label), and fires `input`/`change` events.

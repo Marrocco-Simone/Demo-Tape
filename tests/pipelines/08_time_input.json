@@ -1,0 +1,12 @@
+{
+  "headless": true,
+  "output_dir": "./demo_out_time",
+  "steps": [
+    { "action": "navigate", "url": "http://localhost:8931/time.html" },
+    { "action": "type", "selector": "#start", "text": "0900AM", "type_delay_ms": 60 },
+    { "action": "assert_value", "selector": "#start", "value": "09:00" },
+    { "action": "type", "selector": "#note", "text": "morning shift", "type_delay_ms": 40 },
+    { "action": "assert_value", "selector": "#note", "value": "morning shift" },
+    { "action": "done" }
+  ]
+}
