@@ -40,10 +40,10 @@ _DESCRIPTION_LINE_CSS = "font-size:17px;font-weight:400;line-height:1.45;color:#
 
 # Click/typing feedback: sky blue reads on light and dark apps alike.
 _FX_ACCENT = "#38bdf8"
-# Click choreography: ring appears first, then ripples, then the real click.
-CLICK_RING_MS = 1400
-RING_LEAD_S = 0.45
-RIPPLE_LEAD_S = 0.55
+# Click choreography: the ring marks the target, then the ripples start in
+# the same instant as the real click.
+CLICK_RING_MS = 800
+RING_LEAD_S = 0.2
 
 _FX_SCRIPT = f"""
 (() => {{
@@ -92,11 +92,11 @@ _FX_SCRIPT = f"""
         wave.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483645;'
           + 'left:' + cx + 'px;top:' + cy + 'px;width:14px;height:14px;border-radius:50%;'
           + 'border:2.5px solid {_FX_ACCENT};'
-          + 'animation:demoRipple 0.85s ease-out forwards;'
-          + 'animation-delay:' + (i * 0.13) + 's;opacity:0;'
+          + 'animation:demoRipple 0.5s ease-out forwards;'
+          + 'animation-delay:' + (i * 0.08) + 's;opacity:0;'
           + 'transform:translate(-50%,-50%);';
         (document.body || document.documentElement).appendChild(wave);
-        setTimeout(() => wave.remove(), 1400 + i * 130);
+        setTimeout(() => wave.remove(), 700 + i * 80);
       }}
       return {{ ok: true }};
     }},
@@ -428,12 +428,11 @@ class ActionRunner:
 
     async def click(self, selector: str) -> None:
         await self._scroll_into_center(selector)
-        # Visible choreography before the real click: the element lights up,
-        # waves spread from its center, then the click lands.
+        # The element lights up, then the waves spread from its center as the
+        # click lands.
         await self._fx_ring(selector, CLICK_RING_MS)
         await asyncio.sleep(RING_LEAD_S)
         await self._fx_ripple(selector)
-        await asyncio.sleep(RIPPLE_LEAD_S)
         if not await self._press_at_center(selector):
             raise ActionError(f'could not click selector "{selector}"')
         # The click may have replaced the page under the ring; drop it now

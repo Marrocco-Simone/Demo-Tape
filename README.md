@@ -104,9 +104,9 @@ Notes:
 
 - **Elements are targeted by CSS selector** (not element index). Your agent reads
   the selectors from the code it wrote.
-- **Click/typing feedback is automatic**: every `click` first draws a breathing
-  ring around the element, then ripple waves spread from its center (like circles
-  on still water), then the real click lands. `type` rings the input for as long
+- **Click/typing feedback is automatic**: every `click` draws a breathing ring
+  around the element, and 0.2s later the real click lands while ripple waves
+  spread from its center. `type` rings the input for as long
   as the typing takes. All effects are DOM overlays injected by the recorder —
   they work on any page and never touch the app's own styles.
 - **`highlight`** draws the same ring on any element (a section, a div, a card)
