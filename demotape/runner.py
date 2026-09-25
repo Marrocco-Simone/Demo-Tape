@@ -82,6 +82,7 @@ class _ScreencastRecorder:
         self._pending: set[asyncio.Task] = set()
         self._last_data: str | None = None
         self._last_ts: float | None = None
+        self._last_slot = -1
         self._first_ts: float | None = None
         self._last_ts_mono: float | None = None
         self._written = 0
@@ -105,7 +106,9 @@ class _ScreencastRecorder:
         self._client.register.Page.screencastFrame(self._on_frame)
         await self._client.send.Page.startScreencast(
             params={
-                "format": "png",
+                # PNG encoding at viewport size caps capture near 10 fps on
+                # heavy pages; JPEG keeps up with the 30 fps output.
+                "format": "jpeg",
                 "quality": 90,
                 "maxWidth": self._size["width"],
                 "maxHeight": self._size["height"],
@@ -126,12 +129,16 @@ class _ScreencastRecorder:
         data = event["data"]
         ts = (event.get("metadata") or {}).get("timestamp")
         gap = 0
-        if ts is not None and self._last_ts is not None:
-            elapsed = ts - self._last_ts
+        slot = 0
+        if ts is not None and self._first_ts is not None:
+            # Each frame goes to the output slot of its screencast timestamp,
+            # so uneven repaint intervals keep constant-speed motion on the
+            # fixed framerate grid instead of stretching or shrinking it.
+            slot = int(round((ts - self._first_ts) * self._framerate))
             # Repaints can exceed the target framerate during animations;
-            # sub-frame frames are coalesced into the newest one, which is
-            # flushed if nothing newer arrives (see _flush_skipped).
-            if elapsed < 0.85 / self._framerate:
+            # frames for an already filled slot are coalesced into the newest
+            # one, which is flushed if nothing newer arrives (see _flush_skipped).
+            if slot <= self._last_slot:
                 self._skipped = (ts, data)
                 if self._skip_flush is None:
                     loop = asyncio.get_running_loop()
@@ -146,8 +153,7 @@ class _ScreencastRecorder:
             # frames. The worker repeats the previous frame across the gap so
             # pauses survive in the video.
             if self._last_data is not None:
-                gap = int(round(elapsed * self._framerate)) - 1
-                gap = max(0, min(gap, self._framerate * 30))
+                gap = min(slot - self._last_slot - 1, self._framerate * 30)
         try:
             self._queue.put_nowait((self._last_data, gap, data))
         except queue.Full:
@@ -159,6 +165,7 @@ class _ScreencastRecorder:
                 self._first_frame_mono = time.monotonic()
             self._last_ts = ts
             self._last_ts_mono = time.monotonic()
+            self._last_slot = slot
         self._last_data = data
 
     def _flush_skipped(self) -> None:
@@ -176,11 +183,8 @@ class _ScreencastRecorder:
         if pending is None:
             return
         ts, data = pending
-        gap = 0
-        if self._last_ts is not None:
-            gap = max(0, int(round((ts - self._last_ts) * self._framerate)) - 1)
         try:
-            self._queue.put_nowait((self._last_data, gap, data))
+            self._queue.put_nowait((self._last_data, 0, data))
         except queue.Full:
             self._dropped += 1
             return
@@ -196,6 +200,7 @@ class _ScreencastRecorder:
         else:
             self._last_ts_mono = time.monotonic()
         self._last_ts = ts
+        self._last_slot += 1
         self._last_data = data
 
     def video_time_now(self) -> float:
