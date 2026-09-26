@@ -78,6 +78,7 @@ Each step is a flat object with an `action` plus its params:
 { "action": "drag", "selector": "[role=slider]", "to": 0.7, "duration_seconds": 0.6, "axis": "x" }
 { "action": "drag", "selector": "#task-card-3", "to_selector": "#column-done" }
 { "action": "select", "selector": "select#plan", "option": "pro" }
+{ "action": "upload", "selector": "input[type=file]", "path": "fixtures/receipt.pdf" }
 { "action": "scroll", "selector": "#pricing" }
 { "action": "highlight", "selector": "#pricing", "duration_seconds": 2.0, "spotlight": false }
 { "action": "title", "text": "Sign up", "position": "top", "align": "left" }
@@ -123,10 +124,18 @@ Notes:
   events alone get reverted by React's synthetic event layer). Date and time
   inputs (`time`, `date`, `datetime-local`, `month`, `week`) receive keypress
   events instead, because they ignore `insertText`: type the digits and
-  meridiem as the field expects them (`0900AM` gives `09:00`). Set
+  meridiem as the field expects them (`0900AM` gives `09:00`). A text in the
+  field's own value format (`2027-09-30`, `09:00`) is set at once instead, with
+  `input` and `change` events: it does not depend on the locale's segment
+  order, and it works when the tab no longer receives key events. Set
   `clear: false` to append.
 - **`select`** scrolls to a native `<select>`, picks the option (by value or
   visible label), and fires `input`/`change` events.
+- **`upload`** gives a local file to an `<input type="file">`, also a hidden
+  one, as if the viewer had picked it in the file dialog. The browser fires the
+  input's `change` event. A relative `path` resolves against the working
+  directory of the recorder. Nothing is drawn on the video: highlight the visible
+  drop zone first.
 - **`text_to_speech`** adds a voiceover: every overlay text change (the
   `description`, or the `title` when there is no description) is spoken by
   **Kokoro-82M** — a fully local, Apache-licensed model. The voice starts when

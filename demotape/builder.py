@@ -116,6 +116,9 @@ class Pipeline:
     def select(self, selector: str, option: str) -> None:
         self._add(action="select", selector=selector, option=option)
 
+    def upload(self, selector: str, path: str) -> None:
+        self._add(action="upload", selector=selector, path=path)
+
     def assert_text(self, text: str) -> None:
         self._add(action="assert_text", text=text)
 

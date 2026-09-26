@@ -144,6 +144,16 @@ class SelectStep(BaseModel):
     )
 
 
+class UploadStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["upload"]
+    selector: str = Field(description='CSS selector of the <input type="file"> element; it may be hidden.')
+    path: str = Field(
+        description="File to give to the input. A relative path resolves against the working directory of the recorder."
+    )
+
+
 class ScrollStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -228,6 +238,7 @@ Step = Annotated[
         TypeStep,
         DragStep,
         SelectStep,
+        UploadStep,
         ScrollStep,
         TitleStep,
         DescriptionStep,
@@ -336,6 +347,8 @@ def describe_step(step: Step) -> str:
         return f"{step.selector} -> {target}"  # type: ignore[union-attr]
     if kind == "select":
         return f"{step.selector} option={step.option}"  # type: ignore[union-attr]
+    if kind == "upload":
+        return f"{step.selector} <- {step.path}"  # type: ignore[union-attr]
     if kind == "title" or kind == "description":
         return _shorten(step.text)  # type: ignore[union-attr]
     if kind == "say":

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from pathlib import Path
 from typing import Any
 
 from browser_use.browser.session import BrowserSession, CDPSession
@@ -118,6 +120,20 @@ class ActionError(Exception):
 
 class DoneSignal(Exception):
     """Raised by the `done` step to end the pipeline cleanly."""
+
+
+_INPUT_VALUE_FORMATS = {
+    "date": r"\d{4}-\d{2}-\d{2}",
+    "time": r"\d{2}:\d{2}(:\d{2})?",
+    "datetime-local": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?",
+    "month": r"\d{4}-\d{2}",
+    "week": r"\d{4}-W\d{2}",
+}
+
+
+def _is_input_value(input_type: object, text: str) -> bool:
+    pattern = _INPUT_VALUE_FORMATS.get(str(input_type))
+    return pattern is not None and re.fullmatch(pattern, text) is not None
 
 
 class ActionRunner:
@@ -464,7 +480,7 @@ class ActionRunner:
       el.textContent = '';
     }}
   }}
-  return {{ ok: true, keyed: ['time','date','datetime-local','month','week'].includes(el.type) }};
+  return {{ ok: true, keyed: ['time','date','datetime-local','month','week'].includes(el.type), type: el.type }};
 }})()
 """
         value = await self._eval(focus_expr)
@@ -477,6 +493,13 @@ class ActionRunner:
         await self._fx_ring(selector, type_duration_ms)
 
         keyed = bool(value.get("keyed"))
+        if keyed and _is_input_value(value.get("type"), text):
+            # The text is already the field's own value format: set it at once,
+            # without keys. Key events follow the browser locale's field order,
+            # and a tab can stop receiving them after browser UI takes focus.
+            await asyncio.sleep(len(text) * type_delay_ms / 1000.0)
+            await self._set_value(selector, text)
+            return
         client, session_id = await self._cdp()
         for ch in text:
             if keyed:
@@ -502,6 +525,22 @@ class ActionRunner:
             )
             if type_delay_ms > 0:
                 await asyncio.sleep(type_delay_ms / 1000.0)
+
+    async def _set_value(self, selector: str, text: str) -> None:
+        expr = f"""
+(() => {{
+  const el = document.querySelector({json.dumps(selector)});
+  if (!el) return false;
+  const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+  if (descriptor && descriptor.set) descriptor.set.call(el, {json.dumps(text)});
+  else el.value = {json.dumps(text)};
+  el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  return true;
+}})()
+"""
+        if not await self._eval(expr):
+            raise ActionError(f'could not set the value of "{selector}"')
 
     async def _press_at_center(self, selector: str) -> bool:
         """Click the center of `selector` with a full pointer sequence.
@@ -725,6 +764,23 @@ class ActionRunner:
             reason = (value or {}).get("reason", "unknown")
             raise ActionError(f'could not select option on "{selector}": {reason}')
 
+    async def upload(self, selector: str, path: str) -> None:
+        file_path = Path(path).expanduser().resolve()
+        if not file_path.is_file():
+            raise ActionError(f'upload failed: file "{file_path}" does not exist')
+        client, session_id = await self._cdp()
+        document = await client.send.DOM.getDocument(params={"depth": 0}, session_id=session_id)
+        found = await client.send.DOM.querySelector(
+            params={"nodeId": document["root"]["nodeId"], "selector": selector},
+            session_id=session_id,
+        )
+        node_id = found.get("nodeId") if found else None
+        if not node_id:
+            raise ActionError(f'upload failed: selector "{selector}" not found')
+        await client.send.DOM.setFileInputFiles(
+            params={"files": [str(file_path)], "nodeId": node_id}, session_id=session_id
+        )
+
     async def scroll(self, selector: str) -> None:
         await self._scroll_into_center(selector)
 
@@ -798,6 +854,8 @@ class ActionRunner:
             )
         elif action == "select":
             await self.select(step.selector, step.option)
+        elif action == "upload":
+            await self.upload(step.selector, step.path)
         elif action == "scroll":
             await self.scroll(step.selector)
         elif action == "title":
